@@ -5,8 +5,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model User {
@@ -17,7 +18,7 @@ model User {
   password      String
   name          String
   createdAt     DateTime  @default(now())
-  apiKey        ApiKey?
+  apiKeys       ApiKey[]
   memos         Memo[]
   sessions      Session[]
   accounts      Account[]
@@ -60,13 +61,16 @@ model VerificationToken {
 
 model ApiKey {
   id              String   @id @default(cuid())
-  userId          String   @unique
+  userId          String
+  exchange        String
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   encryptedKey    String
   encryptedSecret String
-  encryptedPass   String
+  encryptedPass   String   @default("")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
+  @@unique([userId, exchange])
 }
 
 model Memo {

@@ -54,16 +54,18 @@ export async function bitgetRequest(
   return data;
 }
 
-/** DB에서 사용자 API 키를 조회하고 복호화하여 반환 */
+/** DB에서 비트겟 API 키를 조회하고 복호화하여 반환 */
 export async function getDecryptedCredentials(
   userId: string
 ): Promise<BitgetCredentials | null> {
-  const apiKey = await prisma.apiKey.findUnique({ where: { userId } });
+  const apiKey = await prisma.apiKey.findUnique({
+    where: { userId_exchange: { userId, exchange: "bitget" } },
+  });
   if (!apiKey) return null;
 
   return {
     apiKey: decrypt(apiKey.encryptedKey),
     apiSecret: decrypt(apiKey.encryptedSecret),
-    passphrase: decrypt(apiKey.encryptedPass),
+    passphrase: apiKey.encryptedPass ? decrypt(apiKey.encryptedPass) : "",
   };
 }

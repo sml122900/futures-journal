@@ -24,7 +24,11 @@ export async function GET(req: NextRequest) {
       limit: searchParams.get("limit") ?? "100",
     };
     const idLessThan = searchParams.get("idLessThan");
+    const startTime = searchParams.get("startTime");
+    const endTime = searchParams.get("endTime");
     if (idLessThan) params.idLessThan = idLessThan;
+    if (startTime) params.startTime = startTime;
+    if (endTime) params.endTime = endTime;
 
     const data = await bitgetRequest(credentials, "GET", "/api/v2/mix/order/fills", params);
 
