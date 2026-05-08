@@ -39,3 +39,13 @@
 - **Problem**: 단일 HTML 파일 프로토타입을 인증·DB·API 보안이 갖춰진 프로덕션 앱으로 전환 필요
 - **Action**: NextAuth 인증, Prisma DB, 서버 API 라우트를 갖춘 Next.js App Router 구조로 전체 기능 포팅, 메모를 localStorage → DB 저장으로 전환
 - **Result**: 로그인/회원가입, API 키 암호화, 거래 데이터 조회, 메모, 테마 전환 등 전체 기능 구현 완료
+
+### 매매 리플레이(영상화) 기능 구현 (2026-05-08)
+- **Problem**: 포지션별 매매 내역을 차트 위에서 영상처럼 재생해 매매 복기를 시각화하고 싶음
+- **Action**: TradingView Lightweight Charts v5로 캔들 애니메이션 재생 엔진 구현. 배속·타임라인·TF 선택·사이드바 체결 내역·Avg Entry 점선·미실현/실현 PnL 실시간 계산까지 포함. 캔들 API(1000봉 자동 분할)와 리플레이 페이지를 Next.js App Router로 통합
+- **Result**: 포지션 클릭 한 번으로 차트 위에서 매매 과정을 영상으로 복기 가능, UTC 오프셋 설정으로 시간대 정확도 확보
+
+### Bitget Hedge Mode fills 방향 식별 (2026-05-08)
+- **Problem**: 롱+숏 동시 보유(hedge mode) 환경에서 리플레이 시 반대 포지션 체결이 혼입됨. `posSide`/`holdSide`/`positionId` 등 일반적인 식별 필드가 fills API 응답에 전혀 없음
+- **Action**: 실제 API 응답 필드 목록 분석으로 `side` 필드가 주문 방향이 아닌 포지션 방향(buy=롱, sell=숏)임을 규명. `o.side === "buy"` 기준으로 롱·숏 완전 분리
+- **Result**: hedge mode에서 롱/숏 포지션 리플레이 정확히 분리, 반대 포지션 체결 혼입 문제 해결

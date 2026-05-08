@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, message: "인증 필요" }, { status: 401 });
     }
 
-    const { positionId, reason, psych, external, text } = await req.json();
+    const { positionId, reason, exitReason, psych, external, text } = await req.json();
 
     if (!positionId) {
       return NextResponse.json(
@@ -48,12 +48,14 @@ export async function POST(req: NextRequest) {
         userId: session.user.id,
         positionId,
         reason: reason ?? "",
+        exitReason: exitReason ?? "",
         psych: psych ?? "",
         external: external ?? "",
         text: text ?? "",
       },
       update: {
         reason: reason ?? "",
+        exitReason: exitReason ?? "",
         psych: psych ?? "",
         external: external ?? "",
         text: text ?? "",

@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import MemoModal, { type MemoSaveData } from "./MemoModal";
 import { useTheme, type Theme } from "@/lib/theme";
 
@@ -15,11 +15,11 @@ interface ParsedOrder {
 }
 
 interface ParsedPos {
-  id: string; date: string; sym: string;
+  id: string; date: string; sym: string; rawSym: string;
   side: 'long' | 'short';
   oAvg: string; cAvg: string; size: string;
   pnl: number; funding: number; totalFee: number; net: number;
-  isNew: boolean; rawTime: number;
+  isNew: boolean; rawTime: number; openTime: number;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -77,9 +77,11 @@ function parsePosHist(raw: AnyRecord[]): ParsedPos[] {
     const closeFee = parseFloat(p.closeFeeTotal || p.closeFee || 0);
     const net = parseFloat(p.netProfit || 0);
     const rawTime = parseInt(p.utime || p.updatedTime || p.ctime || '0');
+    const openTime = parseInt(p.openTime || p.ctime || p.createTime || '0');
     const oAvg = parseFloat(p.openAvgPrice || p.openPriceAvg || 0);
     const cAvg = parseFloat(p.closeAvgPrice || p.closePriceAvg || 0);
-    return { id: p.positionId || String(Math.random()), date: fmtDate(rawTime), sym: symName(p.symbol || ''), side, oAvg: oAvg > 0 ? oAvg.toFixed(2) : '-', cAvg: cAvg > 0 ? cAvg.toFixed(2) : '-', size: p.closeTotalPos || p.openTotalPos || '', pnl, funding, totalFee: openFee + closeFee, net, isNew: false, rawTime };
+    const rawSym = p.symbol || '';
+    return { id: p.positionId || String(Math.random()), date: fmtDate(rawTime), sym: symName(rawSym), rawSym, side, oAvg: oAvg > 0 ? oAvg.toFixed(2) : '-', cAvg: cAvg > 0 ? cAvg.toFixed(2) : '-', size: p.closeTotalPos || p.openTotalPos || '', pnl, funding, totalFee: openFee + closeFee, net, isNew: false, rawTime, openTime };
   }).sort((a, b) => b.rawTime - a.rawTime);
 }
 
@@ -89,6 +91,14 @@ const PAGE = 20;
 function pnlCls(n: number) { return n > 0 ? 'text-green-400' : n < 0 ? 'text-red-400' : 'text-gray-500'; }
 function pnlSign(n: number) { return n > 0 ? '+' : ''; }
 function f4(n: number) { return `${pnlSign(n)}${n.toFixed(4)}`; }
+function fmtPrice(n: number) {
+  if (n === 0) return '0';
+  const abs = Math.abs(n);
+  if (abs >= 1) return n.toFixed(2);
+  if (abs >= 0.01) return n.toFixed(4);
+  if (abs >= 0.0001) return n.toFixed(6);
+  return n.toFixed(8);
+}
 
 // ── Settings Tab ──────────────────────────────────────────────────────────────
 
@@ -220,10 +230,10 @@ function StatsPanel({ balance, orders, positions, subTab }: { balance: AnyRecord
   }
   const equity = balance ? parseFloat(balance.usdtEquity || balance.accountEquity || '0').toFixed(2) : '-';
   const cards = [
-    { label: '잔고', value: equity, sub: 'USDT' },
-    { label: '건수', value: String(count) },
-    { label: subTab === 'orders' ? '순손익(수수료포함)' : '순손익(netProfit)', value: count ? `${pnlSign(pnl)}${pnl.toFixed(2)}` : '-', cls: count ? pnlCls(pnl) : '', sub: 'USDT' },
-    { label: '승률', value: wr !== null ? `${wr.toFixed(1)}%` : '-', cls: wr !== null ? pnlCls(wr - 50) : '' },
+    { label: 'Balance', value: equity, sub: 'USDT' },
+    { label: 'Count', value: String(count) },
+    { label: 'Net PnL', value: count ? `${pnlSign(pnl)}${pnl.toFixed(2)}` : '-', cls: count ? pnlCls(pnl) : '', sub: 'USDT' },
+    { label: 'Win Rate', value: wr !== null ? `${wr.toFixed(1)}%` : '-', cls: wr !== null ? pnlCls(wr - 50) : '' },
   ];
   return (
     <div className="grid grid-cols-5 gap-3 mb-4">
@@ -242,9 +252,9 @@ function StatsPanel({ balance, orders, positions, subTab }: { balance: AnyRecord
 
 export default function DashboardContent() {
   const [mainTab, setMainTab] = useState<'history' | 'openpos' | 'settings'>('history');
-  const [subTab, setSubTab]   = useState<'orders' | 'positions'>('orders');
+  const [subTab, setSubTab]   = useState<'orders' | 'positions'>('positions');
   const [mode, setMode]       = useState<'preset' | 'custom' | 'all'>('preset');
-  const [days, setDays]       = useState(30);
+  const [days, setDays]       = useState(7);
   const [cStart, setCStart]   = useState(() => { const d = new Date(); d.setDate(d.getDate() - 30); return d.toISOString().slice(0, 10); });
   const [cEnd, setCEnd]       = useState(new Date().toISOString().slice(0, 10));
 
@@ -263,13 +273,13 @@ export default function DashboardContent() {
   const [progress, setProgress] = useState({ show: false, pct: 0, label: '' });
   const [isAuto,   setIsAuto]   = useState(false);
   const [lastUpd,  setLastUpd]  = useState('');
-  const autoRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoRef = useRef<ReturnType<typeof globalThis.setInterval> | null>(null);
 
-  const [interval, setInterval] = useState('60');
-  const [memoModal, setMemoModal] = useState<{ id: string; src: 'order' | 'pos' } | null>(null);
+  const [interval, setAutoInterval] = useState('60');
+  const [memoModal, setMemoModal] = useState<{ id: string; src: 'pos' | 'plan' } | null>(null);
 
   useEffect(() => {
-    setInterval(localStorage.getItem('fj_interval') || '60');
+    setAutoInterval(localStorage.getItem('fj_interval') || '60');
   }, []);
 
   const loadMemos = useCallback(async () => {
@@ -367,8 +377,14 @@ export default function DashboardContent() {
       setLoading(true);
       try {
         const now = Date.now();
-        const [ord, bal] = await Promise.all([fetchOrders(now - 30 * 86400000, now), fetch('/api/bitget/balance').then(r => r.json())]);
+        const s = now - 7 * 86400000;
+        const [ord, pos, bal] = await Promise.all([
+          fetchOrders(s, now),
+          fetchPositions(s, now),
+          fetch('/api/bitget/balance').then(r => r.json()),
+        ]);
         setOrders(ord);
+        setPositions(pos);
         if (bal.success && bal.data?.data?.[0]) setBalance(bal.data.data[0]);
         setLastUpd('업데이트: ' + new Date().toLocaleTimeString('ko-KR'));
       } catch {} finally { setLoading(false); }
@@ -389,7 +405,7 @@ export default function DashboardContent() {
 
   const toggleAuto = () => {
     if (isAuto) { if (autoRef.current) clearInterval(autoRef.current); setIsAuto(false); }
-    else { autoRef.current = setInterval(loadData, parseInt(interval) * 1000); setIsAuto(true); }
+    else { autoRef.current = globalThis.setInterval(loadData, parseInt(interval) * 1000); setIsAuto(true); }
   };
 
   const handleSubTabSwitch = (tab: 'orders' | 'positions') => {
@@ -409,12 +425,13 @@ export default function DashboardContent() {
   const memoInfoLine = () => {
     if (!memoModal) return '';
     const pnlSpan = (n: number) => `<span class="${pnlCls(n)}">${n >= 0 ? '+' : ''}${n.toFixed(4)} USDT</span>`;
-    if (memoModal.src === 'order') {
-      const o = orders.find(x => x.id === memoModal.id);
-      return o ? `<strong style="color:#f0f0f0">${o.sym}</strong> &nbsp; ${o.date} &nbsp;|&nbsp; ${o.dir} ${o.type} &nbsp;|&nbsp; 순손익: ${pnlSpan(o.net)}` : memoModal.id;
+    if (memoModal.src === 'plan') {
+      const p = openPos.find((_, i) => `open_${openPos[i].symbol}_${openPos[i].holdSide}` === memoModal.id);
+      if (p) return `<strong style="color:#f0f0f0">${symName(p.symbol)}</strong> &nbsp; ${(p.holdSide || '').toUpperCase()} &nbsp;|&nbsp; ${p.leverage}x &nbsp;|&nbsp; 현재 포지션`;
+      return memoModal.id;
     }
     const p = positions.find(x => x.id === memoModal.id);
-    return p ? `<strong style="color:#f0f0f0">${p.sym}</strong> &nbsp; ${p.date} &nbsp;|&nbsp; ${p.side} &nbsp;|&nbsp; netProfit: ${pnlSpan(p.net)}` : memoModal.id;
+    return p ? `<strong style="color:#f0f0f0">${p.sym}</strong> &nbsp; ${p.date} &nbsp;|&nbsp; ${p.side} &nbsp;|&nbsp; Net PnL: ${pnlSpan(p.net)}` : memoModal.id;
   };
 
   // Filtered & paginated data
@@ -530,7 +547,7 @@ export default function DashboardContent() {
 
           {/* Sub tabs */}
           <div className="flex border-b border-gray-800 mb-4">
-            {(['orders', 'positions'] as const).map(t => (
+            {(['positions', 'orders'] as const).map(t => (
               <button key={t} onClick={() => handleSubTabSwitch(t)}
                 className={`px-5 py-2 text-sm font-medium border-b-2 transition-colors ${subTab === t ? 'border-green-500 text-green-400' : 'border-transparent text-gray-500 hover:text-gray-300'}`}>
                 {t === 'orders' ? '주문 내역' : '포지션 내역'}
@@ -542,23 +559,23 @@ export default function DashboardContent() {
           {subTab === 'orders' && (
             <div>
               <div className="flex gap-2 mb-3 flex-wrap">
-                {filterSelect(oSym, v => { setOSym(v); setOPage(1); }, [{ value: '', label: '전체 심볼' }, ...oSyms.map(s => ({ value: s, label: s }))])}
-                {filterSelect(oSide, v => { setOSide(v); setOPage(1); }, [{ value: '', label: '전체 방향' }, { value: 'long', label: 'Long' }, { value: 'short', label: 'Short' }])}
-                {filterSelect(oType, v => { setOType(v); setOPage(1); }, [{ value: '', label: 'Open/Close 전체' }, { value: 'open', label: 'Open만' }, { value: 'close', label: 'Close만' }])}
+                {filterSelect(oSym, v => { setOSym(v); setOPage(1); }, [{ value: '', label: 'All Symbols' }, ...oSyms.map(s => ({ value: s, label: s }))])}
+                {filterSelect(oSide, v => { setOSide(v); setOPage(1); }, [{ value: '', label: 'All Sides' }, { value: 'long', label: 'Long' }, { value: 'short', label: 'Short' }])}
+                {filterSelect(oType, v => { setOType(v); setOPage(1); }, [{ value: '', label: 'All Types' }, { value: 'open', label: 'Open' }, { value: 'close', label: 'Close' }])}
               </div>
               <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="border-b border-gray-800 text-gray-500 uppercase tracking-wide">
-                        {['날짜', '심볼', '방향', '종류', '수량', '체결가', '포지션손익', '수수료', '순손익', '메모'].map(h => (
+                        {['Date', 'Symbol', 'Side', 'Type', 'Size', 'Price', 'PnL', 'Fee', 'Net PnL'].map(h => (
                           <th key={h} className="py-3 px-3 text-left font-semibold whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
                       {oItems.length === 0 ? (
-                        <tr><td colSpan={10} className="py-12 text-center text-gray-600">{loading ? '불러오는 중...' : '주문 내역이 없습니다'}</td></tr>
+                        <tr><td colSpan={9} className="py-12 text-center text-gray-600">{loading ? '불러오는 중...' : '주문 내역이 없습니다'}</td></tr>
                       ) : oItems.map(o => {
                         const isClose = o.type === 'close';
                         return (
@@ -571,13 +588,7 @@ export default function DashboardContent() {
                             <td className="py-2.5 px-3 text-gray-300">{o.avg}</td>
                             <td className="py-2.5 px-3">{isClose ? <span className={pnlCls(o.posProfit)}>{f4(o.posProfit)}</span> : <span className="text-gray-700">-</span>}</td>
                             <td className="py-2.5 px-3">{isClose ? <span className="text-red-400">{o.fee.toFixed(4)}</span> : <span className="text-gray-700">-</span>}</td>
-                            <td className="py-2.5 px-3">{isClose ? <PnlTooltip net={o.net} detail={<>포지션손익: {f4(o.posProfit)}<br />수수료: {o.fee.toFixed(4)}<br />순손익: {f4(o.net)}</>} /> : <span className="text-gray-700">-</span>}</td>
-                            <td className="py-2.5 px-3">
-                              <button onClick={() => setMemoModal({ id: o.id, src: 'order' })}
-                                className={`px-2 py-1 rounded text-xs border transition-colors ${memos[o.id] ? 'border-green-600 text-green-400 bg-green-900/30' : 'border-gray-700 text-gray-500 hover:border-gray-500 hover:text-gray-300'}`}>
-                                {memos[o.id] ? '✓ 메모' : '+ 메모'}
-                              </button>
-                            </td>
+                            <td className="py-2.5 px-3">{isClose ? <PnlTooltip net={o.net} detail={<>PnL: {f4(o.posProfit)}<br />Fee: {o.fee.toFixed(4)}<br />Net PnL: {f4(o.net)}</>} /> : <span className="text-gray-700">-</span>}</td>
                           </tr>
                         );
                       })}
@@ -598,22 +609,22 @@ export default function DashboardContent() {
           {subTab === 'positions' && (
             <div>
               <div className="flex gap-2 mb-3 flex-wrap">
-                {filterSelect(pSym, v => { setPSym(v); setPPage(1); }, [{ value: '', label: '전체 심볼' }, ...pSyms.map(s => ({ value: s, label: s }))])}
-                {filterSelect(pSide, v => { setPSide(v); setPPage(1); }, [{ value: '', label: '전체 방향' }, { value: 'long', label: 'Long' }, { value: 'short', label: 'Short' }])}
+                {filterSelect(pSym, v => { setPSym(v); setPPage(1); }, [{ value: '', label: 'All Symbols' }, ...pSyms.map(s => ({ value: s, label: s }))])}
+                {filterSelect(pSide, v => { setPSide(v); setPPage(1); }, [{ value: '', label: 'All Sides' }, { value: 'long', label: 'Long' }, { value: 'short', label: 'Short' }])}
               </div>
               <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="border-b border-gray-800 text-gray-500 uppercase tracking-wide">
-                        {['종료일', '심볼', '방향', '진입가', '청산가', '수량', '포지션손익', '펀딩피', '수수료', '순손익', '메모'].map(h => (
+                        {['Close Date', 'Symbol', 'Side', 'Entry', 'Close', 'Size', 'PnL', 'Funding', 'Fee', 'Net PnL', 'Memo', ''].map(h => (
                           <th key={h} className="py-3 px-3 text-left font-semibold whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
                       {pItems.length === 0 ? (
-                        <tr><td colSpan={11} className="py-12 text-center text-gray-600">{loading ? '불러오는 중...' : '포지션 내역이 없습니다'}</td></tr>
+                        <tr><td colSpan={12} className="py-12 text-center text-gray-600">{loading ? '불러오는 중...' : '포지션 내역이 없습니다'}</td></tr>
                       ) : pItems.map(p => (
                         <tr key={p.id} className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors">
                           <td className="py-2.5 px-3 text-gray-500 whitespace-nowrap">{p.date}</td>
@@ -626,12 +637,22 @@ export default function DashboardContent() {
                           <td className="py-2.5 px-3"><span className={pnlCls(p.funding)}>{f4(p.funding)}</span></td>
                           <td className="py-2.5 px-3 text-red-400">{p.totalFee.toFixed(4)}</td>
                           <td className="py-2.5 px-3">
-                            <PnlTooltip net={p.net} detail={<>포지션손익: {f4(p.pnl)}<br />펀딩피: {f4(p.funding)}<br />수수료: {p.totalFee.toFixed(4)}<br />순손익: {f4(p.net)}</>} />
+                            <PnlTooltip net={p.net} detail={<>PnL: {f4(p.pnl)}<br />Funding: {f4(p.funding)}<br />Fee: {p.totalFee.toFixed(4)}<br />Net PnL: {f4(p.net)}</>} />
                           </td>
                           <td className="py-2.5 px-3">
                             <button onClick={() => setMemoModal({ id: p.id, src: 'pos' })}
                               className={`px-2 py-1 rounded text-xs border transition-colors ${memos[p.id] ? 'border-green-600 text-green-400 bg-green-900/30' : 'border-gray-700 text-gray-500 hover:border-gray-500 hover:text-gray-300'}`}>
-                              {memos[p.id] ? '✓ 메모' : '+ 메모'}
+                              {memos[p.id] ? '✓ Memo' : '+ Memo'}
+                            </button>
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <button
+                              onClick={() => {
+                                const url = `/replay?sym=${p.rawSym}&side=${p.side}&from=${p.openTime || p.rawTime - 86400000}&to=${p.rawTime}&label=${encodeURIComponent(p.sym)}&posId=${encodeURIComponent(p.id)}`;
+                                window.open(url, '_blank');
+                              }}
+                              className="px-2 py-1 rounded text-xs border border-purple-700 text-purple-400 hover:border-purple-500 hover:bg-purple-900/30 transition-colors whitespace-nowrap">
+                              ▶ Replay
                             </button>
                           </td>
                         </tr>
@@ -666,25 +687,38 @@ export default function DashboardContent() {
                 const pnl = parseFloat(p.unrealizedPL || p.unrealizedPl || '0');
                 const entry = parseFloat(p.openPriceAvg || p.avgPrice || '0');
                 const mark = parseFloat(p.markPrice || '0');
+                const planId = `open_${p.symbol}_${p.holdSide}`;
                 return (
                   <div key={i} className={`bg-gray-900 rounded-xl p-4 border border-gray-800 border-l-4 ${isLong ? 'border-l-green-500' : 'border-l-red-500'}`}>
                     <div className="flex items-center justify-between mb-3">
                       <span className="text-base font-bold text-white">{symName(p.symbol || '')}</span>
-                      {badge(isLong ? 'Long' : 'Short', isLong)}
-                    </div>
-                    {[
-                      { k: '진입가', v: entry.toFixed(2) },
-                      { k: '현재가', v: mark.toFixed(2) },
-                      { k: '수량',   v: p.total || p.size || '-' },
-                      { k: '증거금', v: `${parseFloat(p.margin || p.im || '0').toFixed(2)} USDT` },
-                      { k: '청산가', v: parseFloat(p.liquidationPrice || '0').toFixed(2), cls: 'text-red-400' },
-                      { k: '미실현 손익', v: `${pnlSign(pnl)}${pnl.toFixed(2)} USDT`, cls: pnlCls(pnl) },
-                    ].map(({ k, v, cls }) => (
-                      <div key={k} className="flex justify-between py-1.5 border-b border-gray-800 text-xs last:border-0">
-                        <span className="text-gray-500">{k}</span>
-                        <span className={cls || 'text-gray-300'}>{v}</span>
+                      <div className="flex items-center gap-2">
+                        {badge(isLong ? 'Long' : 'Short', isLong)}
+                        <button onClick={() => setMemoModal({ id: planId, src: 'plan' })}
+                          className={`px-2 py-0.5 rounded text-xs border transition-colors ${memos[planId] ? 'border-green-600 text-green-400 bg-green-900/30' : 'border-gray-700 text-gray-500 hover:border-gray-500 hover:text-gray-300'}`}>
+                          {memos[planId] ? '✓ Plan' : '+ Plan'}
+                        </button>
                       </div>
-                    ))}
+                    </div>
+                    {(() => {
+                      const qty = parseFloat(p.total || p.size || '0');
+                      const notional = qty * mark;
+                      const items: { k: string; node: React.ReactNode; cls?: string }[] = [
+                        { k: 'Entry', node: fmtPrice(entry) },
+                        { k: 'Mark', node: fmtPrice(mark) },
+                        { k: 'Size', node: <span className="text-right"><span className="text-gray-300">{qty.toLocaleString()}</span>{notional > 0 && <span className="text-gray-600 ml-1">≈{fmtPrice(notional)} USDT</span>}</span> },
+                        { k: 'Leverage', node: `${p.leverage || '-'}x` },
+                        { k: 'Margin', node: `${fmtPrice(parseFloat(p.marginSize || '0'))} USDT` },
+                        { k: 'Liq Price', node: fmtPrice(parseFloat(p.liquidationPrice || '0')), cls: 'text-red-400' },
+                        { k: 'Unrealized PnL', node: `${pnlSign(pnl)}${fmtPrice(pnl)} USDT`, cls: pnlCls(pnl) },
+                      ];
+                      return items.map(({ k, node, cls }) => (
+                        <div key={k} className="flex justify-between items-center py-1.5 border-b border-gray-800 text-xs last:border-0">
+                          <span className="text-gray-500">{k}</span>
+                          <span className={cls || 'text-gray-300'}>{node}</span>
+                        </div>
+                      ));
+                    })()}
                   </div>
                 );
               })}
@@ -695,13 +729,14 @@ export default function DashboardContent() {
 
       {/* ── 설정 ─────────────────────────────────────────── */}
       {mainTab === 'settings' && (
-        <SettingsTab interval={interval} setInterval={setInterval} isAuto={isAuto} autoRef={autoRef} loadData={loadData} />
+        <SettingsTab interval={interval} setInterval={setAutoInterval} isAuto={isAuto} autoRef={autoRef} loadData={loadData} />
       )}
 
-      {/* Memo Modal */}
+      {/* Memo / Plan Modal */}
       {memoModal && (
         <MemoModal
           id={memoModal.id}
+          title={memoModal.src === 'plan' ? '포지션 계획' : '포지션 메모'}
           infoLine={memoInfoLine()}
           existing={memos[memoModal.id]}
           onSave={handleMemoSave}
