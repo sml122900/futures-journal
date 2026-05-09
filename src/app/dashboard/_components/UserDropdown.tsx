@@ -66,6 +66,7 @@ export default function UserDropdown({ name, email, exchange }: Props) {
           <div className="py-1">
             {menuItem("/settings/profile", "👤", "회원정보 수정")}
             {menuItem("/onboarding/exchange", "🔑", "API 키 관리")}
+            {menuItem("/settings/ai", "🤖", "AI 설정")}
           </div>
 
           <div className="border-t border-gray-800 py-1">

@@ -17,9 +17,12 @@ model User {
   image         String?
   password      String
   name          String
+  credits       Int       @default(0)
   createdAt     DateTime  @default(now())
   apiKeys       ApiKey[]
   memos         Memo[]
+  purchases     Purchase[]
+  creditLogs    CreditLog[]
   sessions      Session[]
   accounts      Account[]
 }
@@ -71,6 +74,28 @@ model ApiKey {
   updatedAt       DateTime @updatedAt
 
   @@unique([userId, exchange])
+}
+
+model Purchase {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  packageId  String
+  credits    Int
+  amountKrw  Int
+  tossKey    String   @unique
+  orderId    String   @unique
+  status     String   @default("pending")
+  createdAt  DateTime @default(now())
+}
+
+model CreditLog {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  delta     Int
+  reason    String
+  createdAt DateTime @default(now())
 }
 
 model Memo {

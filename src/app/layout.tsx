@@ -10,9 +10,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ko" suppressHydrationWarning>
-      <head>
+      <head suppressHydrationWarning>
         {/* 화면 깜빡임 방지: JS 실행 전에 테마 적용 */}
-        <script dangerouslySetInnerHTML={{ __html: `
+        <script suppressHydrationWarning dangerouslySetInnerHTML={{ __html: `
           (function(){
             var t=localStorage.getItem('fj_theme')||'dark';
             var e=t==='system'?(window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'):t;

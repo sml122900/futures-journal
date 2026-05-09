@@ -45,6 +45,21 @@
 - **Action**: TradingView Lightweight Charts v5로 캔들 애니메이션 재생 엔진 구현. 배속·타임라인·TF 선택·사이드바 체결 내역·Avg Entry 점선·미실현/실현 PnL 실시간 계산까지 포함. 캔들 API(1000봉 자동 분할)와 리플레이 페이지를 Next.js App Router로 통합
 - **Result**: 포지션 클릭 한 번으로 차트 위에서 매매 과정을 영상으로 복기 가능, UTC 오프셋 설정으로 시간대 정확도 확보
 
+### 크레딧 기반 AI SaaS 수익화 설계 (2026-05-10)
+- **Problem**: AI API 비용이 발생하는 기능에서 수익화 구조 필요. 사용자 직접 키 등록 허용 시 기술 허들 낮은 타겟(비트겟 API 연동 사용자) 특성상 수익화 불가.
+- **Action**: 사용자 키 등록 옵션 완전 제거. 크레딧 충전 구매 방식으로 설계. 모델별 실제 API 비용 분석 후 마진 70~86% 확보하는 차감량 설정. Prisma transaction으로 결제 승인·크레딧 지급·로그 기록 원자적 처리.
+- **Result**: 4개 패키지(1,000~20,000원) + 5개 AI 모델 선택 구조. 가입 보너스 30 크레딧으로 서비스 체험 가능.
+
+### Toss Payments 결제 연동 (2026-05-10)
+- **Problem**: `@tosspayments/payment-widget-sdk` 결제위젯 사용 시 401 Unauthorized 에러. 결제 UI 렌더링 전 버튼 클릭 시 "결제 UI가 아직 렌더링되지 않았습니다" 에러.
+- **Action**: 위젯 SDK가 Toss 대시보드 별도 상품 활성화를 요구하는 제품임을 파악. `@tosspayments/payment-sdk` 일반 결제창으로 교체. React Strict Mode 이중 실행 방지, `useSession` status 기반 인증 처리 적용.
+- **Result**: Toss 결제창 연동 완료. 카드 결제 → `/payments/success` 리다이렉트 → 크레딧 자동 지급 플로우 동작.
+
+### 음성 메모 + AI 필드 자동 분류 (2026-05-10)
+- **Problem**: 거래 직후 흥분 상태에서 텍스트로 메모하기 어려움. 5개 필드를 직접 분류·입력하는 과정이 번거로워 실사용률 저하 우려.
+- **Action**: 브라우저 Web Speech API(무료, 실시간, 서버 불필요)로 STT 구현. 음성 원문 + 포지션 컨텍스트를 선택한 AI(Claude/Gemini)에 전달, 5개 메모 필드로 자동 분류. 크레딧 확인→AI 호출→차감을 Prisma transaction으로 처리.
+- **Result**: 말하는 것만으로 진입이유·청산이유·심리상태 등 자동 분류. 모델별 차감량 차등 적용(5~50c).
+
 ### Bitget Hedge Mode fills 방향 식별 (2026-05-08)
 - **Problem**: 롱+숏 동시 보유(hedge mode) 환경에서 리플레이 시 반대 포지션 체결이 혼입됨. `posSide`/`holdSide`/`positionId` 등 일반적인 식별 필드가 fills API 응답에 전혀 없음
 - **Action**: 실제 API 응답 필드 목록 분석으로 `side` 필드가 주문 방향이 아닌 포지션 방향(buy=롱, sell=숏)임을 규명. `o.side === "buy"` 기준으로 롱·숏 완전 분리
