@@ -60,6 +60,21 @@
 - **Action**: 브라우저 Web Speech API(무료, 실시간, 서버 불필요)로 STT 구현. 음성 원문 + 포지션 컨텍스트를 선택한 AI(Claude/Gemini)에 전달, 5개 메모 필드로 자동 분류. 크레딧 확인→AI 호출→차감을 Prisma transaction으로 처리.
 - **Result**: 말하는 것만으로 진입이유·청산이유·심리상태 등 자동 분류. 모델별 차감량 차등 적용(5~50c).
 
+### SaaS 기능 완성도 Gap Analysis 및 체계적 보완 (2026-05-11)
+- **Problem**: Phase 4~12를 "완료"로 표시했으나 실제로는 PLAN.md 명시 요구사항의 30~60%만 구현된 상태. 누락 항목 파악 없이 커밋함
+- **Action**: Phase별 파일 존재·로직 구현·동작 여부를 3단계로 검증. 8개 Phase에서 총 20개 이상 누락 항목 발견. SSE 스트리밍·플랜 게이팅·PNG 아이콘·Excel 시트 등 우선순위 순으로 보완
+- **Result**: 모든 Phase ✅ 완료. 자동화 검증 스크립트(Node.js grep 41개 파일 + 40개 로직 패턴) 작성으로 재검증 효율화
+
+### Claude API SSE 스트리밍 채팅 구현 (2026-05-11)
+- **Problem**: AI 코치 채팅이 응답을 한 번에 반환해 3~10초 블로킹 발생. Next.js 서버리스에서 WebSocket 사용 어려움
+- **Action**: Anthropic SDK `messages.stream()` + Next.js `ReadableStream` 조합으로 SSE 구현. 스트리밍 완료(done 이벤트) 후 트랜잭션으로 크레딧 차감·DB 저장 처리
+- **Result**: 첫 글자 즉시 표시, 크레딧 안전 보장, 클라이언트 `getReader()` SSE 파싱으로 실시간 텍스트 렌더링
+
+### 플랜 기반 API 권한 게이팅 설계 (2026-05-11)
+- **Problem**: 구독 모델 추가 후 실제 API에 권한 체크가 없어 모든 사용자가 premium 기능 무제한 사용 가능
+- **Action**: `checkFeatureAccess(userId, feature)` async 함수 구현 (DB 조회). reports/coach-chat/excel-export/rules 4개 API에 403 + PLAN_REQUIRED 응답 적용. 클라이언트 `UpgradeModal` 컴포넌트 연결
+- **Result**: 플랜별 기능 분리 완성. Next.js 미들웨어(Edge Runtime) 대신 API Route 레이어 적용으로 Prisma 호환성 확보
+
 ### 룰 기반 리스크 감지 시스템 설계 (2026-05-11)
 - **Problem**: API read-only 환경에서 매매 룰 위반을 막을 수 없고, 사용자가 룰을 어겼는지 사후에야 인지하는 문제
 - **Action**: 6종 룰 타입(time_block/cooldown/daily_limit/psych_block/liq_distance/loss_streak) 정의. 포지션 조회 API 호출 시 백그라운드에서 `checkAllPositions` 실행, `@@unique([ruleId, positionId])`로 중복 위반 방지
