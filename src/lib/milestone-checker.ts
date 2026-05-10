@@ -66,6 +66,16 @@ export async function checkAndAwardMilestones(
   // 월 +10% (총손익 / 총마진 > 10%) — 마진 데이터 없을 경우 단순 5U 이상 흑자
   check("monthly_10_percent", monthPnl >= 10 && wins > 0);
 
+  // 룰 완전 준수 주 (최근 7일 룰 위반 0건 + 거래 1건 이상)
+  const weekTrades = positions.filter((p) => p.closeTime >= weekAgo).length;
+  if (weekTrades > 0) {
+    const weekViolations = await prisma.ruleViolation.count({
+      where: { userId, detectedAt: { gte: new Date(weekAgo) } },
+    });
+    check("rule_compliance_week",      weekViolations === 0);
+    check("first_100_rule_compliance", weekViolations === 0);
+  }
+
   if (!toAward.length) return [];
 
   // 달성 마일스톤 일괄 저장 (skipDuplicates로 race condition 방지)

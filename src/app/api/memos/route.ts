@@ -2,6 +2,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import prisma from "@/lib/prisma";
+import { checkAndAwardMilestones } from "@/lib/milestone-checker";
+import { getDecryptedCredentials, bitgetRequest } from "@/lib/bitget";
 
 /** 내 메모 전체 조회 */
 export async function GET() {
@@ -60,6 +62,22 @@ export async function POST(req: NextRequest) {
         external: external ?? "",
         text: text ?? "",
       },
+    });
+
+    // 메모 저장 후 마일스톤 체크 (백그라운드)
+    const userId = session.user.id;
+    Promise.resolve().then(async () => {
+      try {
+        const credentials = await getDecryptedCredentials(userId);
+        if (!credentials) return;
+        const res = await bitgetRequest(credentials, "GET", "/api/v2/mix/position/history-position", {
+          productType: "USDT-FUTURES", limit: "100",
+        });
+        const list = res?.data?.list ?? [];
+        if (list.length) await checkAndAwardMilestones(userId, list);
+      } catch (e) {
+        console.error("[milestone-checker/memos]", e);
+      }
     });
 
     return NextResponse.json({ success: true, data: memo });

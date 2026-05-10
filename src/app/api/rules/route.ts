@@ -43,6 +43,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, message: validationError }, { status: 400 });
     }
 
+    // 무료 플랜: 룰 1개 제한
+    const { checkFeatureAccess } = await import("@/lib/plans");
+    const hasUnlimited = await checkFeatureAccess(session.user.id, "rules_unlimited");
+    if (!hasUnlimited) {
+      const existingCount = await prisma.tradingRule.count({ where: { userId: session.user.id } });
+      if (existingCount >= 1) {
+        return NextResponse.json(
+          { success: false, message: "PLAN_REQUIRED", data: { required: "pro" } },
+          { status: 403 }
+        );
+      }
+    }
+
     const rule = await prisma.tradingRule.create({
       data: {
         userId: session.user.id,

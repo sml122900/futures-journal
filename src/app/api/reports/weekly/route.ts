@@ -40,6 +40,16 @@ export async function POST() {
 
     const userId = session.user.id;
 
+    // 플랜 권한 체크 (premium 이상)
+    const { checkFeatureAccess } = await import("@/lib/plans");
+    const allowed = await checkFeatureAccess(userId, "ai_reports");
+    if (!allowed) {
+      return NextResponse.json(
+        { success: false, message: "PLAN_REQUIRED", data: { required: "premium" } },
+        { status: 403 }
+      );
+    }
+
     // 크레딧 확인
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { credits: true } });
     if (!user || user.credits < REPORT_COST) {

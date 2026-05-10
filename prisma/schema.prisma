@@ -164,14 +164,15 @@ model Subscription {
 }
 
 model ChatMessage {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role      String
-  content   String
-  createdAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role           String
+  content        String
+  conversationId String   @default("default")
+  createdAt      DateTime @default(now())
 
-  @@index([userId, createdAt])
+  @@index([userId, conversationId, createdAt])
 }
 
 model Milestone {

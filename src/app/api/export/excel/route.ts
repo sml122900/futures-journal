@@ -33,14 +33,28 @@ export async function GET(req: NextRequest) {
     const fromMs = from ? new Date(from).getTime() : Date.now() - 90 * 86400000;
     const toMs   = to   ? new Date(to).getTime()   : Date.now();
 
+    // 플랜 권한 체크 (pro 이상)
+    const { checkFeatureAccess } = await import("@/lib/plans");
+    const allowed = await checkFeatureAccess(session.user.id, "excel_export");
+    if (!allowed) {
+      return NextResponse.json(
+        { success: false, message: "PLAN_REQUIRED", data: { required: "pro" } },
+        { status: 403 }
+      );
+    }
+
     const credentials = await getDecryptedCredentials(session.user.id);
     if (!credentials) {
       return NextResponse.json({ success: false, message: "API 키를 먼저 등록해주세요" }, { status: 400 });
     }
 
-    // 데이터 수집
-    const [posRes, memos] = await Promise.all([
+    // 데이터 수집 (포지션 + 주문 + 메모 병렬)
+    const [posRes, ordersRes, memos] = await Promise.all([
       bitgetRequest(credentials, "GET", "/api/v2/mix/position/history-position", {
+        productType: "USDT-FUTURES", limit: "100",
+        startTime: String(fromMs), endTime: String(toMs),
+      }),
+      bitgetRequest(credentials, "GET", "/api/v2/mix/order/fills", {
         productType: "USDT-FUTURES", limit: "100",
         startTime: String(fromMs), endTime: String(toMs),
       }),
@@ -53,6 +67,7 @@ export async function GET(req: NextRequest) {
     ]);
 
     const positions = (posRes?.data?.list ?? []) as Record<string, unknown>[];
+    const orders    = (ordersRes?.data?.fillList ?? ordersRes?.data ?? []) as Record<string, unknown>[];
 
     const wb = new ExcelJS.Workbook();
     wb.creator = "Futures Journal";
@@ -160,6 +175,110 @@ export async function GET(req: NextRequest) {
         pnlCell.font = { color: { argb: pnlColor(pnl) }, bold: true };
         pnlCell.numFmt = "+0.00;-0.00;0.00";
       });
+
+    // ── 시트 4: 주문 내역 ──────────────────────────────────────────────────────
+    const wsOrders = wb.addWorksheet("주문 내역");
+    wsOrders.columns = [
+      { header: "체결일시",    key: "cTime",      width: 18 },
+      { header: "심볼",        key: "symbol",     width: 10 },
+      { header: "방향",        key: "side",       width: 8  },
+      { header: "수량",        key: "size",       width: 10 },
+      { header: "체결가",      key: "price",      width: 12 },
+      { header: "손익(U)",     key: "profit",     width: 12 },
+      { header: "수수료(U)",   key: "fee",        width: 12 },
+    ];
+    styleHeader(wsOrders);
+    orders.forEach((o) => {
+      const profit = parseFloat(String(o.profit ?? o.totalProfits ?? 0));
+      const row = wsOrders.addRow({
+        cTime:  fmtTs(o.cTime as string),
+        symbol: String(o.symbol ?? "").replace("USDT", ""),
+        side:   o.side,
+        size:   o.baseVolume ?? o.size,
+        price:  parseFloat(String(o.price ?? o.priceAvg ?? 0)),
+        profit,
+        fee:    parseFloat(String(o.fee ?? 0)),
+      });
+      if (profit !== 0) {
+        row.getCell("profit").font = { color: { argb: pnlColor(profit) }, bold: true };
+        row.getCell("profit").numFmt = "+0.00;-0.00;0.00";
+      }
+    });
+
+    // ── 시트 5: 세금 신고용 (월별 실현 손익) ──────────────────────────────────
+    const wsTax = wb.addWorksheet("세금 신고용");
+    wsTax.getCell("A1").value = "* 한국 가상자산 과세 기준: 연간 실현 손익 250만원 초과분 20% 양도세";
+    wsTax.getCell("A1").font = { italic: true, color: { argb: "FF64748B" }, size: 9 };
+    wsTax.addRow([]);
+
+    wsTax.columns = [
+      { header: "월",               key: "month",       width: 12 },
+      { header: "포지션 수",        key: "trades",      width: 10 },
+      { header: "총 수익 포지션(U)", key: "grossProfit", width: 18 },
+      { header: "총 손실 포지션(U)", key: "grossLoss",   width: 18 },
+      { header: "월 실현 손익(U)",   key: "netPnl",      width: 18 },
+      { header: "수수료 합계(U)",    key: "totalFee",    width: 14 },
+      { header: "순 실현 손익(U)",   key: "netAfterFee", width: 18 },
+    ];
+    wsTax.getRow(3).eachCell((cell) => {
+      cell.fill = headerFill;
+      cell.font = headerFont;
+      cell.alignment = { vertical: "middle" };
+    });
+    wsTax.getRow(3).height = 22;
+
+    // 월별 세금 집계 (포지션 기준)
+    const taxMap = new Map<string, { trades: number; grossProfit: number; grossLoss: number; netPnl: number; totalFee: number }>();
+    positions.forEach((p) => {
+      const t = parseInt(String(p.closeTime ?? 0));
+      if (!t) return;
+      const month = new Date(t).toISOString().slice(0, 7);
+      const net = parseFloat(String(p.netProfit ?? 0));
+      const fee = parseFloat(String(p.openFee ?? 0)) + parseFloat(String(p.closeFee ?? 0));
+      const prev = taxMap.get(month) ?? { trades: 0, grossProfit: 0, grossLoss: 0, netPnl: 0, totalFee: 0 };
+      taxMap.set(month, {
+        trades:      prev.trades + 1,
+        grossProfit: prev.grossProfit + (net > 0 ? net : 0),
+        grossLoss:   prev.grossLoss   + (net < 0 ? net : 0),
+        netPnl:      prev.netPnl + net,
+        totalFee:    prev.totalFee + Math.abs(fee),
+      });
+    });
+
+    let cumPnl = 0;
+    Array.from(taxMap.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .forEach(([month, v]) => {
+        cumPnl += v.netPnl;
+        const netAfterFee = parseFloat((v.netPnl - v.totalFee).toFixed(2));
+        const row = wsTax.addRow({
+          month,
+          trades:      v.trades,
+          grossProfit: parseFloat(v.grossProfit.toFixed(2)),
+          grossLoss:   parseFloat(v.grossLoss.toFixed(2)),
+          netPnl:      parseFloat(v.netPnl.toFixed(2)),
+          totalFee:    parseFloat(v.totalFee.toFixed(2)),
+          netAfterFee,
+        });
+        row.getCell("netPnl").font     = { color: { argb: pnlColor(v.netPnl) }, bold: true };
+        row.getCell("netAfterFee").font = { color: { argb: pnlColor(netAfterFee) }, bold: true };
+        row.getCell("netPnl").numFmt     = "+0.00;-0.00;0.00";
+        row.getCell("netAfterFee").numFmt = "+0.00;-0.00;0.00";
+      });
+
+    // 합계 행
+    const totalRow = wsTax.addRow({
+      month: "합계",
+      trades: Array.from(taxMap.values()).reduce((s, v) => s + v.trades, 0),
+      grossProfit: parseFloat(Array.from(taxMap.values()).reduce((s, v) => s + v.grossProfit, 0).toFixed(2)),
+      grossLoss:   parseFloat(Array.from(taxMap.values()).reduce((s, v) => s + v.grossLoss, 0).toFixed(2)),
+      netPnl:      parseFloat(cumPnl.toFixed(2)),
+      totalFee:    parseFloat(Array.from(taxMap.values()).reduce((s, v) => s + v.totalFee, 0).toFixed(2)),
+      netAfterFee: parseFloat((cumPnl - Array.from(taxMap.values()).reduce((s, v) => s + v.totalFee, 0)).toFixed(2)),
+    });
+    totalRow.font = { bold: true };
+    totalRow.getCell("netPnl").numFmt     = "+0.00;-0.00;0.00";
+    totalRow.getCell("netAfterFee").numFmt = "+0.00;-0.00;0.00";
 
     // 버퍼로 변환
     const buffer = await wb.xlsx.writeBuffer();

@@ -1,10 +1,10 @@
-// AI 코치 채팅 API (스트리밍, 크레딧 5개/메시지)
+// AI 코치 채팅 API (SSE 스트리밍, 크레딧 5개/메시지, conversationId로 대화 그룹)
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 
 const CHAT_COST = 5;
-const MAX_HISTORY = 10; // 최근 N개 메시지 컨텍스트로 포함
+const MAX_HISTORY = 10;
 
 const COACH_SYSTEM = `당신은 선물 거래 트레이더의 전담 AI 매매 코치입니다.
 사용자의 매매 데이터를 바탕으로 친근하고 실용적인 조언을 제공하세요.
@@ -18,100 +18,133 @@ const COACH_SYSTEM = `당신은 선물 거래 트레이더의 전담 AI 매매 �
 
 /**
  * POST /api/ai/coach-chat
- * Body: { message: string }
- * 이전 대화 히스토리 자동 포함, 크레딧 5개 차감
+ * Body: { message: string, conversationId?: string }
+ * SSE 스트리밍 응답
  */
 export async function POST(req: NextRequest) {
-  try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ success: false, message: "인증 필요" }, { status: 401 });
-    }
-
-    const userId = session.user.id;
-    const { message } = await req.json();
-    if (!message?.trim()) {
-      return NextResponse.json({ success: false, message: "메시지를 입력해주세요" }, { status: 400 });
-    }
-
-    // 크레딧 확인
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { credits: true } });
-    if (!user || user.credits < CHAT_COST) {
-      return NextResponse.json(
-        { success: false, message: "INSUFFICIENT_CREDITS", data: { required: CHAT_COST, current: user?.credits ?? 0 } },
-        { status: 402 }
-      );
-    }
-
-    // 최근 대화 히스토리 조회
-    const history = await prisma.chatMessage.findMany({
-      where: { userId },
-      orderBy: { createdAt: "desc" },
-      take: MAX_HISTORY,
-      select: { role: true, content: true },
-    });
-
-    // 최근 통계 컨텍스트 (메모 5개 요약)
-    const recentMemos = await prisma.memo.findMany({
-      where: { userId, psych: { not: "" } },
-      orderBy: { updatedAt: "desc" },
-      take: 5,
-      select: { psych: true, reason: true },
-    });
-
-    const context = recentMemos.length
-      ? `[사용자 최근 심리 상태: ${recentMemos.map((m) => m.psych).join(", ")}]`
-      : "";
-
-    const messages: { role: "user" | "assistant"; content: string }[] = [
-      ...history.reverse().map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
-      { role: "user", content: context ? `${context}\n\n${message}` : message },
-    ];
-
-    // Claude API 호출
-    const Anthropic = (await import("@anthropic-ai/sdk")).default;
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-    const msg = await client.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 512,
-      system: COACH_SYSTEM,
-      messages,
-    });
-    const reply = (msg.content[0] as { type: string; text: string }).text.trim();
-
-    // 대화 저장 + 크레딧 차감 (트랜잭션)
-    await prisma.$transaction([
-      prisma.chatMessage.create({ data: { userId, role: "user", content: message } }),
-      prisma.chatMessage.create({ data: { userId, role: "assistant", content: reply } }),
-      prisma.user.update({ where: { id: userId }, data: { credits: { decrement: CHAT_COST } } }),
-      prisma.creditLog.create({ data: { userId, delta: -CHAT_COST, reason: "coach_chat_claude-sonnet-4-6" } }),
-    ]);
-
-    return NextResponse.json({ success: true, data: { reply } });
-  } catch (error) {
-    console.error("[coach-chat]", error);
-    return NextResponse.json({ success: false, message: "AI 처리 실패" }, { status: 500 });
+  const session = await auth();
+  if (!session?.user?.id) {
+    return NextResponse.json({ success: false, message: "인증 필요" }, { status: 401 });
   }
+
+  const userId = session.user.id;
+  const { message, conversationId = "default" } = await req.json();
+
+  if (!message?.trim()) {
+    return NextResponse.json({ success: false, message: "메시지를 입력해주세요" }, { status: 400 });
+  }
+
+  // 플랜 권한 체크 (premium 이상)
+  const { checkFeatureAccess } = await import("@/lib/plans");
+  const allowed = await checkFeatureAccess(userId, "ai_coach");
+  if (!allowed) {
+    return NextResponse.json(
+      { success: false, message: "PLAN_REQUIRED", data: { required: "premium" } },
+      { status: 403 }
+    );
+  }
+
+  // 크레딧 확인
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { credits: true } });
+  if (!user || user.credits < CHAT_COST) {
+    return NextResponse.json(
+      { success: false, message: "INSUFFICIENT_CREDITS", data: { required: CHAT_COST, current: user?.credits ?? 0 } },
+      { status: 402 }
+    );
+  }
+
+  // 이 대화의 히스토리
+  const history = await prisma.chatMessage.findMany({
+    where: { userId, conversationId },
+    orderBy: { createdAt: "desc" },
+    take: MAX_HISTORY,
+    select: { role: true, content: true },
+  });
+
+  // 최근 심리 컨텍스트
+  const recentMemos = await prisma.memo.findMany({
+    where: { userId, psych: { not: "" } },
+    orderBy: { updatedAt: "desc" },
+    take: 5,
+    select: { psych: true },
+  });
+
+  const context = recentMemos.length
+    ? `[사용자 최근 심리 상태: ${recentMemos.map((m) => m.psych).join(", ")}]`
+    : "";
+
+  const messages: { role: "user" | "assistant"; content: string }[] = [
+    ...history.reverse().map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
+    { role: "user", content: context ? `${context}\n\n${message}` : message },
+  ];
+
+  // SSE 스트리밍
+  const encoder = new TextEncoder();
+  let fullReply = "";
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        const Anthropic = (await import("@anthropic-ai/sdk")).default;
+        const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+        const anthropicStream = await client.messages.stream({
+          model: "claude-sonnet-4-6",
+          max_tokens: 512,
+          system: COACH_SYSTEM,
+          messages,
+        });
+
+        for await (const chunk of anthropicStream) {
+          if (chunk.type === "content_block_delta" && chunk.delta.type === "text_delta") {
+            const text = chunk.delta.text;
+            fullReply += text;
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
+          }
+        }
+
+        // 스트리밍 완료 후 저장
+        await prisma.$transaction([
+          prisma.chatMessage.create({ data: { userId, role: "user",      content: message,    conversationId } }),
+          prisma.chatMessage.create({ data: { userId, role: "assistant", content: fullReply,  conversationId } }),
+          prisma.user.update({ where: { id: userId }, data: { credits: { decrement: CHAT_COST } } }),
+          prisma.creditLog.create({ data: { userId, delta: -CHAT_COST, reason: "coach_chat_claude-sonnet-4-6" } }),
+        ]);
+
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`));
+        controller.close();
+      } catch (error) {
+        const msg = (error as Error)?.message ?? "AI 처리 실패";
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: msg })}\n\n`));
+        controller.close();
+      }
+    },
+  });
+
+  return new NextResponse(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+    },
+  });
 }
 
-/** GET /api/ai/coach-chat — 대화 히스토리 조회 */
-export async function GET() {
-  try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ success: false, message: "인증 필요" }, { status: 401 });
-    }
-
-    const history = await prisma.chatMessage.findMany({
-      where: { userId: session.user.id },
-      orderBy: { createdAt: "asc" },
-      take: 100,
-    });
-
-    return NextResponse.json({ success: true, data: history });
-  } catch (error) {
-    console.error("[coach-chat GET]", error);
-    return NextResponse.json({ success: false, message: "서버 오류" }, { status: 500 });
+/** GET /api/ai/coach-chat?conversationId=X — 특정 대화 히스토리 조회 */
+export async function GET(req: NextRequest) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return NextResponse.json({ success: false, message: "인증 필요" }, { status: 401 });
   }
+
+  const { searchParams } = new URL(req.url);
+  const conversationId = searchParams.get("conversationId") ?? "default";
+
+  const history = await prisma.chatMessage.findMany({
+    where: { userId: session.user.id, conversationId },
+    orderBy: { createdAt: "asc" },
+    take: 200,
+  });
+
+  return NextResponse.json({ success: true, data: history });
 }

@@ -33,6 +33,26 @@ export function canUseFeature(plan: Plan, feature: Feature): boolean {
   return PLAN_FEATURES[plan]?.includes(feature) ?? false;
 }
 
+/** DB에서 사용자 플랜을 조회해 기능 사용 가능 여부 반환 */
+export async function checkFeatureAccess(userId: string, feature: Feature): Promise<boolean> {
+  const { default: prisma } = await import("./prisma");
+  const sub = await prisma.subscription.findUnique({
+    where: { userId },
+    select: { plan: true },
+  });
+  const plan = (sub?.plan ?? "free") as Plan;
+  return canUseFeature(plan, feature);
+}
+
+/** 권한 부족 시 반환할 표준 응답 */
+export function planRequiredResponse(required: Plan) {
+  const { NextResponse } = require("next/server");
+  return NextResponse.json(
+    { success: false, message: "PLAN_REQUIRED", data: { required } },
+    { status: 403 }
+  );
+}
+
 export interface PlanInfo {
   label: string;
   priceKrw: number;

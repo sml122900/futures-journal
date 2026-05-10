@@ -5,6 +5,7 @@ import prisma from "@/lib/prisma";
 import Link from "next/link";
 import UserDropdown from "@/app/dashboard/_components/UserDropdown";
 import NavLinks from "@/components/NavLinks";
+import SaveImageButton from "./SaveImageButton";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -61,7 +62,7 @@ export default async function ReportDetailPage({ params }: RouteContext) {
         </div>
       </header>
 
-      <main className="max-w-3xl mx-auto px-6 py-8 space-y-6">
+      <main className="max-w-3xl mx-auto px-6 py-8 space-y-6" id="report-content">
         {/* 헤더 */}
         <div className="flex items-center justify-between">
           <div>
@@ -70,9 +71,15 @@ export default async function ReportDetailPage({ params }: RouteContext) {
               {fmtDate(report.periodStart)} ~ {fmtDate(report.periodEnd)}
             </h2>
           </div>
-          <Link href="/reports" className="text-sm text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded-lg transition-colors">
-            ← 목록
-          </Link>
+          <div className="flex items-center gap-2">
+            <SaveImageButton
+              reportId={report.id}
+              period={`${new Date(report.periodStart).toISOString().slice(0, 10)}`}
+            />
+            <Link href="/reports" className="text-sm text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded-lg transition-colors">
+              ← 목록
+            </Link>
+          </div>
         </div>
 
         {/* 핵심 지표 */}

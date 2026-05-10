@@ -10,6 +10,7 @@ export type MilestoneType =
   | "profitable_month"
   | "monthly_10_percent"
   | "rule_compliance_week"
+  | "first_100_rule_compliance"
   | "fomo_zero_week"
   | "memo_streak_7"
   | "7day_profit_streak"
@@ -31,7 +32,8 @@ export const MILESTONE_META: Record<MilestoneType, MilestoneMeta> = {
   profitable_week:    { label: "주간 흑자",         description: "한 주 누적 손익이 플러스입니다.",              icon: "📅", rarity: "bronze"  },
   profitable_month:   { label: "월간 흑자",         description: "한 달 누적 손익이 플러스입니다.",              icon: "📆", rarity: "silver"  },
   monthly_10_percent: { label: "월 +10%",          description: "월 수익률 10% 이상을 달성했습니다.",          icon: "🏆", rarity: "gold"    },
-  rule_compliance_week:{ label: "룰 완전 준수 주",  description: "한 주 동안 룰 위반이 0건입니다.",              icon: "🛡️", rarity: "silver"  },
+  rule_compliance_week:       { label: "룰 완전 준수 주",    description: "한 주 동안 룰 위반이 0건입니다.",                     icon: "🛡️", rarity: "silver"  },
+  first_100_rule_compliance:  { label: "첫 100% 룰 준수 주", description: "처음으로 한 주 전체를 룰 위반 없이 거래했습니다.",     icon: "🥇", rarity: "gold"    },
   fomo_zero_week:     { label: "FOMO 제로 주",      description: "한 주 동안 FOMO 심리 위반이 없습니다.",        icon: "🧘", rarity: "gold"    },
   memo_streak_7:      { label: "메모 7일 연속",      description: "7일 연속으로 매매 후 메모를 작성했습니다.",     icon: "📝", rarity: "silver"  },
   "7day_profit_streak":  { label: "7일 연속 흑자",  description: "7일 연속으로 일일 손익이 플러스입니다.",       icon: "🌟", rarity: "gold"    },
