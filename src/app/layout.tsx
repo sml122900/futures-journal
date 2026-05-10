@@ -1,10 +1,19 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import Providers from "./providers";
 
 export const metadata: Metadata = {
   title: "Futures Journal",
   description: "비트겟 선물 매매 일지",
+  manifest: "/manifest.json",
+  appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Futures Journal" },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  themeColor: "#4ade80",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -18,6 +27,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             var e=t==='system'?(window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'):t;
             document.documentElement.setAttribute('data-theme',e);
           })();
+          if('serviceWorker' in navigator){
+            window.addEventListener('load',function(){
+              navigator.serviceWorker.register('/sw.js');
+            });
+          }
         `}} />
       </head>
       <body suppressHydrationWarning>

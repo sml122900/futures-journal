@@ -1,0 +1,37 @@
+{
+  "name": "Futures Journal",
+  "short_name": "FJ",
+  "description": "비트겟 USDT-M 선물 거래 매매 일지",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#030712",
+  "theme_color": "#4ade80",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["finance", "productivity"],
+  "shortcuts": [
+    {
+      "name": "대시보드",
+      "url": "/dashboard",
+      "description": "매매 내역 보기"
+    },
+    {
+      "name": "통계",
+      "url": "/stats",
+      "description": "통계 분석"
+    }
+  ]
+}

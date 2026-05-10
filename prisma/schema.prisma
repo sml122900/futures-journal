@@ -23,6 +23,12 @@ model User {
   memos         Memo[]
   purchases     Purchase[]
   creditLogs    CreditLog[]
+  aiReports     AIReport[]
+  rules         TradingRule[]
+  violations    RuleViolation[]
+  milestones    Milestone[]
+  chatMessages  ChatMessage[]
+  subscription  Subscription?
   sessions      Session[]
   accounts      Account[]
 }
@@ -112,4 +118,83 @@ model Memo {
   updatedAt  DateTime @updatedAt
 
   @@unique([userId, positionId])
+}
+
+model TradingRule {
+  id         String          @id @default(cuid())
+  userId     String
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type       String
+  config     Json
+  enabled    Boolean         @default(true)
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+  violations RuleViolation[]
+
+  @@index([userId, enabled])
+}
+
+model RuleViolation {
+  id         String      @id @default(cuid())
+  userId     String
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ruleId     String
+  rule       TradingRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  positionId String
+  ruleType   String
+  ruleConfig Json
+  detectedAt DateTime    @default(now())
+  pnlImpact  Float?
+
+  @@unique([ruleId, positionId])
+  @@index([userId, detectedAt])
+  @@index([userId, ruleType])
+}
+
+model Subscription {
+  id          String    @id @default(cuid())
+  userId      String    @unique
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan        String    @default("free")
+  status      String    @default("active")
+  startedAt   DateTime  @default(now())
+  expiresAt   DateTime?
+  tossSubKey  String?
+  cancelledAt DateTime?
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      String
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model Milestone {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        String
+  metadata    Json?
+  achievedAt  DateTime @default(now())
+
+  @@unique([userId, type])
+  @@index([userId, achievedAt])
+}
+
+model AIReport {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        String
+  periodStart DateTime
+  periodEnd   DateTime
+  content     Json
+  createdAt   DateTime @default(now())
+
+  @@index([userId, type, createdAt])
 }

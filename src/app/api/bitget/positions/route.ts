@@ -1,7 +1,8 @@
-// 비트겟 현재 오픈 포지션 조회 API
+// 비트겟 현재 오픈 포지션 조회 API + 룰 위반 감지
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { bitgetRequest, getDecryptedCredentials } from "@/lib/bitget";
+import { checkAllPositions } from "@/lib/rule-engine";
 
 export async function GET() {
   try {
@@ -24,6 +25,14 @@ export async function GET() {
       "/api/v2/mix/position/all-position",
       { productType: "USDT-FUTURES" }
     );
+
+    // 오픈 포지션 대상 룰 위반 감지 (응답 차단 없이 백그라운드 실행)
+    const positions = data?.data ?? [];
+    if (positions.length > 0) {
+      checkAllPositions(session.user.id, credentials, positions).catch(
+        (e) => console.error("[rule-engine] checkAllPositions 실패:", e)
+      );
+    }
 
     return NextResponse.json({ success: true, data });
   } catch (error) {

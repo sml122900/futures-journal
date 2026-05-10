@@ -60,6 +60,21 @@
 - **Action**: 브라우저 Web Speech API(무료, 실시간, 서버 불필요)로 STT 구현. 음성 원문 + 포지션 컨텍스트를 선택한 AI(Claude/Gemini)에 전달, 5개 메모 필드로 자동 분류. 크레딧 확인→AI 호출→차감을 Prisma transaction으로 처리.
 - **Result**: 말하는 것만으로 진입이유·청산이유·심리상태 등 자동 분류. 모델별 차감량 차등 적용(5~50c).
 
+### 룰 기반 리스크 감지 시스템 설계 (2026-05-11)
+- **Problem**: API read-only 환경에서 매매 룰 위반을 막을 수 없고, 사용자가 룰을 어겼는지 사후에야 인지하는 문제
+- **Action**: 6종 룰 타입(time_block/cooldown/daily_limit/psych_block/liq_distance/loss_streak) 정의. 포지션 조회 API 호출 시 백그라운드에서 `checkAllPositions` 실행, `@@unique([ruleId, positionId])`로 중복 위반 방지
+- **Result**: 포지션 진입 시 자동 위반 감지 + DB 기록, 대시보드에 실시간 위험도 표시
+
+### Next.js 16 Turbopack 환경 PWA 구현 (2026-05-11)
+- **Problem**: `next-pwa`가 webpack 플러그인 기반으로 동작해 Next.js 16 Turbopack과 충돌, 빌드 실패
+- **Action**: `next-pwa` 제거. `public/sw.js`(Cache First, API 제외), `manifest.json`, `offline.html` 직접 작성. layout.tsx 인라인 스크립트로 SW 등록
+- **Result**: 의존성 0개 추가로 PWA 완성, Turbopack 호환, 캐시 전략 코드 레벨 직접 제어
+
+### 풀스택 SaaS MVP 14개 기능 단일 세션 완성 (2026-05-11)
+- **Problem**: 리스크 룰 UI / AI 리포트 / 데이터 Export / PWA / 마일스톤 / AI 코치 / 구독 시스템 등 대형 기능 9개를 체계적으로 구현 필요
+- **Action**: PLAN.md 기반 Phase별 자동 진행. 각 Phase 완료 후 `npm run build`로 타입·빌드 검증, 실패 시 즉시 수정 후 재빌드하는 사이클 유지
+- **Result**: Phase 4~12 연속 완료, 빌드 오류 0개로 마무리 (타입 오류 4건 즉시 수정)
+
 ### Bitget Hedge Mode fills 방향 식별 (2026-05-08)
 - **Problem**: 롱+숏 동시 보유(hedge mode) 환경에서 리플레이 시 반대 포지션 체결이 혼입됨. `posSide`/`holdSide`/`positionId` 등 일반적인 식별 필드가 fills API 응답에 전혀 없음
 - **Action**: 실제 API 응답 필드 목록 분석으로 `side` 필드가 주문 방향이 아닌 포지션 방향(buy=롱, sell=숏)임을 규명. `o.side === "buy"` 기준으로 롱·숏 완전 분리

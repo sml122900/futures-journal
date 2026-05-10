@@ -1,5 +1,12 @@
 'use client';
 import { useState, useEffect, useRef } from "react";
+import { RULE_META, type RuleType } from "@/lib/rules-types";
+
+interface RuleViolationSummary {
+  id: string;
+  ruleType: string;
+  detectedAt: string;
+}
 
 export interface MemoSaveData {
   reason: string;
@@ -38,7 +45,8 @@ interface Props {
   onClose: () => void;
 }
 
-export default function MemoModal({ id: _id, infoLine, title = '포지션 메모', existing, onSave, onClose }: Props) {
+export default function MemoModal({ id, infoLine, title = '포지션 메모', existing, onSave, onClose }: Props) {
+  const [violations, setViolations] = useState<RuleViolationSummary[]>([]);
   const [data, setData] = useState<MemoSaveData>({
     reason:     existing?.reason     ?? '',
     exitReason: existing?.exitReason ?? '',
@@ -56,6 +64,15 @@ export default function MemoModal({ id: _id, infoLine, title = '포지션 메모
   const [supported, setSupported] = useState(true);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
+
+  // 이 포지션의 룰 위반 기록 조회
+  useEffect(() => {
+    if (!id || id.startsWith("open_")) return; // 오픈 포지션 ID는 비트겟 positionId 아님
+    fetch(`/api/rules/violations?positionId=${encodeURIComponent(id)}`)
+      .then((r) => r.json())
+      .then((j) => { if (j.success) setViolations(j.data); })
+      .catch(() => {});
+  }, [id]);
 
   // 기본 모델을 localStorage에서 로드
   useEffect(() => {
@@ -170,6 +187,22 @@ export default function MemoModal({ id: _id, infoLine, title = '포지션 메모
           <div className="bg-gray-800 rounded-lg px-3 py-2 text-xs text-gray-400 leading-relaxed"
             dangerouslySetInnerHTML={{ __html: infoLine }} />
         </div>
+
+        {/* 룰 위반 경고 배너 */}
+        {violations.length > 0 && (
+          <div className="px-6 pt-3 shrink-0">
+            <div className="bg-red-900/30 border border-red-500/30 rounded-xl px-3 py-2.5">
+              <p className="text-xs font-semibold text-red-400 mb-1">⚠️ 진입 시 룰 위반 감지됨</p>
+              <div className="flex flex-wrap gap-1.5">
+                {violations.map((v) => (
+                  <span key={v.id} className="text-xs text-red-300 bg-red-400/10 px-2 py-0.5 rounded-full">
+                    {RULE_META[v.ruleType as RuleType]?.label ?? v.ruleType}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* 음성 메모 섹션 */}
         <div className="px-6 pt-4 shrink-0">
