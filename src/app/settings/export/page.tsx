@@ -2,51 +2,107 @@
 // 데이터 내보내기 설정 페이지
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
-type Format = "csv" | "excel" | "json";
-type DataType = "positions" | "orders" | "memos";
-
-const FORMAT_INFO = {
-  csv:   { label: "CSV",   icon: "📄", desc: "엑셀/스프레드시트에서 바로 열 수 있는 범용 형식", cost: "무료" },
-  excel: { label: "Excel", icon: "📊", desc: "시트 구성 (포지션/메모/월별 요약), 색상 강조 포함", cost: "무료" },
-  json:  { label: "JSON",  icon: "💾", desc: "메모·룰·위반·리포트 전체 백업 (복원 가능)", cost: "무료" },
-};
-
-const DATA_TYPES: { value: DataType; label: string }[] = [
-  { value: "positions", label: "포지션 내역" },
-  { value: "orders",    label: "주문 내역"   },
-  { value: "memos",     label: "메모"         },
-];
+type Format  = "excel" | "csv";
+type Section = "positions" | "orders" | "full";
 
 const PERIODS = [
-  { label: "최근 7일",   days: 7   },
-  { label: "최근 30일",  days: 30  },
-  { label: "최근 90일",  days: 90  },
-  { label: "전체",       days: 0   },
+  { label: "7일",   days: 7   },
+  { label: "30일",  days: 30  },
+  { label: "90일",  days: 90  },
+  { label: "전체",  days: 0   },
+  { label: "직접",  days: -1  },
 ];
 
-export default function ExportPage() {
-  const [format, setFormat]   = useState<Format>("excel");
-  const [dataType, setDataType] = useState<DataType>("positions");
-  const [period, setPeriod]   = useState(30);
+function useDateRange() {
+  const [period, setPeriod] = useState(30);
+  const [from, setFrom]     = useState("");
+  const [to, setTo]         = useState(() => new Date().toISOString().slice(0, 10));
+
+  function getParams(): { from?: string; to: string } {
+    if (period === -1) {
+      return { from: from ? new Date(from).toISOString() : undefined, to: new Date(to + "T23:59:59").toISOString() };
+    }
+    const now = new Date();
+    return {
+      from: period ? new Date(now.getTime() - period * 86400000).toISOString() : undefined,
+      to:   now.toISOString(),
+    };
+  }
+
+  return { period, setPeriod, from, setFrom, to, setTo, getParams };
+}
+
+function DateRangeSelector({ state }: { state: ReturnType<typeof useDateRange> }) {
+  const { period, setPeriod, from, setFrom, to, setTo } = state;
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-2 flex-wrap">
+        {PERIODS.map(({ label, days }) => (
+          <button key={days} onClick={() => setPeriod(days)}
+            className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+              period === days
+                ? "bg-green-600 border-green-500 text-white font-medium"
+                : "bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-600"
+            }`}>{label}</button>
+        ))}
+      </div>
+      {period === -1 && (
+        <div className="flex items-center gap-2 mt-2">
+          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
+            className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-green-500" />
+          <span className="text-gray-500 text-sm">~</span>
+          <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
+            className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-green-500" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ExportCard({
+  title,
+  description,
+  section,
+  memoNote,
+}: {
+  title: string;
+  description: string;
+  section: Section;
+  memoNote?: string;
+}) {
+  const router = useRouter();
+  const [format, setFormat] = useState<Format>("excel");
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState("");
+  const dateRange = useDateRange();
 
-  async function handleExport() {
+  function handleClickSelect() {
+    sessionStorage.setItem("fjExportSelect", JSON.stringify({ section }));
+    router.push("/dashboard");
+  }
+
+  async function handleDownload() {
     setLoading(true);
     setError("");
     try {
-      const now = new Date();
-      const from = period ? new Date(now.getTime() - period * 86400000).toISOString() : undefined;
-      const to   = now.toISOString();
-
+      const { from, to } = dateRange.getParams();
       let url: string;
-      if (format === "json") {
-        url = "/api/export/json";
-      } else if (format === "excel") {
-        url = `/api/export/excel?from=${from ?? ""}&to=${to}`;
+
+      if (section === "full") {
+        if (format === "excel") {
+          url = `/api/export/excel?${from ? `from=${from}&` : ""}to=${to}`;
+        } else {
+          url = `/api/export/json`;
+        }
       } else {
-        url = `/api/export/csv?type=${dataType}&from=${from ?? ""}&to=${to}`;
+        const type = section; // "positions" | "orders"
+        if (format === "excel") {
+          url = `/api/export/excel?type=${type}&${from ? `from=${from}&` : ""}to=${to}`;
+        } else {
+          url = `/api/export/csv?type=${type}&${from ? `from=${from}&` : ""}to=${to}`;
+        }
       }
 
       const res = await fetch(url);
@@ -56,12 +112,12 @@ export default function ExportPage() {
         return;
       }
 
-      // 파일 다운로드 트리거
       const blob = await res.blob();
-      const cd = res.headers.get("Content-Disposition") ?? "";
-      const fname = cd.match(/filename="([^"]+)"/)?.[1] ?? `export.${format}`;
+      const cd   = res.headers.get("Content-Disposition") ?? "";
+      const fname = cd.match(/filename="([^"]+)"/)?.[1]
+        ?? `export-${new Date().toISOString().slice(0, 10)}.${format === "excel" ? "xlsx" : format === "csv" ? "csv" : "json"}`;
       const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
+      a.href     = URL.createObjectURL(blob);
       a.download = fname;
       a.click();
       URL.revokeObjectURL(a.href);
@@ -72,6 +128,75 @@ export default function ExportPage() {
     }
   }
 
+  const isFullJson = section === "full" && format === "csv";
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-4">
+      <div>
+        <h2 className="text-sm font-semibold text-white">{title}</h2>
+        <p className="text-xs text-gray-500 mt-0.5">{description}</p>
+        {memoNote && (
+          <p className="text-xs text-green-400/80 mt-1">{memoNote}</p>
+        )}
+      </div>
+
+      {/* 형식 */}
+      <div>
+        <p className="text-xs text-gray-400 mb-2">형식</p>
+        <div className="flex gap-2">
+          {(section === "full"
+            ? [{ v: "excel" as Format, label: "Excel (.xlsx)" }, { v: "csv" as Format, label: "JSON 백업" }]
+            : [{ v: "excel" as Format, label: "Excel (.xlsx)" }, { v: "csv" as Format, label: "CSV" }]
+          ).map(({ v, label }) => (
+            <button key={v} onClick={() => setFormat(v)}
+              className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+                format === v
+                  ? "bg-blue-600 border-blue-500 text-white font-medium"
+                  : "bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600"
+              }`}>{label}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* 기간 (JSON은 기간 무관) */}
+      {!isFullJson && (
+        <div>
+          <p className="text-xs text-gray-400 mb-2">기간</p>
+          <DateRangeSelector state={dateRange} />
+        </div>
+      )}
+
+      {isFullJson && (
+        <p className="text-xs text-gray-500">메모·룰·위반·리포트 전체 백업 (기간 무관)</p>
+      )}
+
+      {/* 클릭으로 선택 */}
+      {section !== "full" && (
+        <div>
+          <div className="flex items-center gap-3 my-1">
+            <div className="flex-1 h-px bg-gray-800" />
+            <span className="text-xs text-gray-600">또는</span>
+            <div className="flex-1 h-px bg-gray-800" />
+          </div>
+          <button onClick={handleClickSelect}
+            className="w-full bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 font-medium py-2.5 rounded-lg transition-colors text-sm flex items-center justify-center gap-2">
+            <span>🖱️</span> 클릭으로 선택
+          </button>
+          <p className="text-xs text-gray-600 mt-1 text-center">대시보드에서 시작·종료 항목을 더블클릭해 범위 지정</p>
+        </div>
+      )}
+
+      {error && <p className="text-xs text-red-400">{error}</p>}
+
+      <button onClick={handleDownload} disabled={loading}
+        className="w-full bg-green-500 hover:bg-green-400 disabled:opacity-50 text-black font-semibold py-2.5 rounded-lg transition-colors text-sm">
+        {loading ? "생성 중..." : "다운로드"}
+      </button>
+    </div>
+  );
+}
+
+export default function ExportPage() {
   return (
     <div className="min-h-screen bg-gray-950 text-white">
       <header className="border-b border-gray-800 px-6 py-3 flex items-center gap-4">
@@ -79,71 +204,23 @@ export default function ExportPage() {
         <h1 className="text-base font-semibold text-white">데이터 내보내기</h1>
       </header>
 
-      <main className="max-w-2xl mx-auto px-6 py-8 space-y-6">
-        {/* 형식 선택 */}
-        <section>
-          <h2 className="text-sm font-semibold text-gray-300 mb-3">내보내기 형식</h2>
-          <div className="grid grid-cols-3 gap-3">
-            {(Object.entries(FORMAT_INFO) as [Format, typeof FORMAT_INFO[Format]][]).map(([f, info]) => (
-              <button key={f} onClick={() => setFormat(f)}
-                className={`bg-gray-900 border rounded-xl p-4 text-left transition-colors ${
-                  format === f ? "border-green-400/50 bg-green-400/5" : "border-gray-800 hover:border-gray-700"
-                }`}>
-                <div className="text-2xl mb-2">{info.icon}</div>
-                <div className="text-sm font-semibold text-white">{info.label}</div>
-                <div className="text-xs text-gray-500 mt-1 leading-relaxed">{info.desc}</div>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        {/* 데이터 종류 (CSV만) */}
-        {format === "csv" && (
-          <section>
-            <h2 className="text-sm font-semibold text-gray-300 mb-3">데이터 종류</h2>
-            <div className="flex gap-2">
-              {DATA_TYPES.map(({ value, label }) => (
-                <button key={value} onClick={() => setDataType(value)}
-                  className={`px-4 py-2 text-sm rounded-lg border transition-colors ${
-                    dataType === value
-                      ? "bg-green-600 border-green-500 text-white font-medium"
-                      : "bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-600"
-                  }`}>{label}</button>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {/* 기간 선택 (JSON 제외) */}
-        {format !== "json" && (
-          <section>
-            <h2 className="text-sm font-semibold text-gray-300 mb-3">기간</h2>
-            <div className="flex gap-2 flex-wrap">
-              {PERIODS.map(({ label, days }) => (
-                <button key={days} onClick={() => setPeriod(days)}
-                  className={`px-4 py-2 text-sm rounded-lg border transition-colors ${
-                    period === days
-                      ? "bg-green-600 border-green-500 text-white font-medium"
-                      : "bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-600"
-                  }`}>{label}</button>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {/* JSON 안내 */}
-        {format === "json" && (
-          <div className="bg-blue-900/20 border border-blue-400/20 rounded-xl p-4 text-sm text-blue-300">
-            메모, 룰, 위반 기록, AI 리포트 전체를 JSON으로 백업합니다. 비트겟 거래 데이터는 포함되지 않습니다.
-          </div>
-        )}
-
-        {error && <p className="text-sm text-red-400">{error}</p>}
-
-        <button onClick={handleExport} disabled={loading}
-          className="w-full bg-green-500 hover:bg-green-400 disabled:opacity-50 text-black font-semibold py-3 rounded-xl transition-colors text-sm">
-          {loading ? "생성 중..." : `${FORMAT_INFO[format].label} 다운로드`}
-        </button>
+      <main className="max-w-2xl mx-auto px-6 py-8 space-y-4">
+        <ExportCard
+          section="positions"
+          title="포지션 내역"
+          description="종료된 포지션 전체를 Bitget 원본 형식으로 내보냅니다."
+          memoNote="진입이유·청산이유·심리상태·자유메모 컬럼이 추가됩니다."
+        />
+        <ExportCard
+          section="orders"
+          title="매매 내역 (체결)"
+          description="체결된 개별 주문 전체를 Bitget 원본 형식으로 내보냅니다."
+        />
+        <ExportCard
+          section="full"
+          title="전체 저널 내보내기"
+          description="포지션·메모·월별 요약·세금 신고용 다중 시트 Excel 또는 JSON 전체 백업."
+        />
       </main>
     </div>
   );

@@ -90,6 +90,21 @@
 - **Action**: PLAN.md 기반 Phase별 자동 진행. 각 Phase 완료 후 `npm run build`로 타입·빌드 검증, 실패 시 즉시 수정 후 재빌드하는 사이클 유지
 - **Result**: Phase 4~12 연속 완료, 빌드 오류 0개로 마무리 (타입 오류 4건 즉시 수정)
 
+### Bitget 원본 형식 호환 내보내기 + 메모 결합 (2026-05-12)
+- **Problem**: 거래소 웹사이트 다운로드는 메모·심리상태 등 저널 데이터가 없고, 앱 내보내기는 Bitget 형식과 달라 기존 분석 워크플로 연계 불가
+- **Action**: Bitget XLS 파일에서 실제 컬럼 구조 역공학 분석. 포지션 내역(12컬럼) + 매매 내역(13컬럼) 각각 동일 형식으로 구현. positionId 기반 메모 JOIN으로 진입이유·청산이유·심리상태 4개 컬럼 추가. 90일 청크 분할 + idLessThan 커서로 기간 무제한 조회
+- **Result**: Excel/CSV 모두 지원, Bitget 원본과 동일한 컬럼 순서·형식 유지하면서 매매 심리 데이터 포함
+
+### 더블클릭 범위 선택 UX 구현 (2026-05-12)
+- **Problem**: 내보내기에서 날짜 입력은 실제 내역을 보지 않고 날짜를 외워야 해서 번거로움. "3번째 포지션부터 7번째까지" 같은 직관적 선택 불가
+- **Action**: sessionStorage로 선택 모드 상태를 페이지 간 전달. 대시보드에 고정 배너(fixed, z-50)로 3단계 안내(시작→종료→형식). 더블클릭된 행을 색상 강조(파란/주황/녹색), 선택 완료 시 즉시 다운로드 후 모드 자동 해제
+- **Result**: 내역을 눈으로 보면서 범위 지정 → 클릭 4회로 다운로드 완료. URL params/Context 없이 sessionStorage만으로 페이지 간 UI 상태 전달
+
+### PWA Service Worker 캐시 전략 오진단 수정 (2026-05-12)
+- **Problem**: 개발 중 몇 번 클릭하면 ERR_FAILED 반복 발생. PowerShell 직접 요청은 200 OK — 서버 문제가 아님
+- **Action**: 서비스 워커 로그 분석으로 /_next/ 청크 캐시가 HMR 신규 청크와 충돌임을 규명. PRECACHE의 /dashboard가 인증 HTML을 캐시해 stale auth 유발도 확인. /_next/ 전면 제외, Cache First → Network First 전환, 개발 모드 자동 SW 해제 3가지 동시 수정
+- **Result**: ERR_FAILED 재현 없음. 개발/프로덕션 SW 동작 분리로 향후 동일 문제 예방
+
 ### Bitget Hedge Mode fills 방향 식별 (2026-05-08)
 - **Problem**: 롱+숏 동시 보유(hedge mode) 환경에서 리플레이 시 반대 포지션 체결이 혼입됨. `posSide`/`holdSide`/`positionId` 등 일반적인 식별 필드가 fills API 응답에 전혀 없음
 - **Action**: 실제 API 응답 필드 목록 분석으로 `side` 필드가 주문 방향이 아닌 포지션 방향(buy=롱, sell=숏)임을 규명. `o.side === "buy"` 기준으로 롱·숏 완전 분리

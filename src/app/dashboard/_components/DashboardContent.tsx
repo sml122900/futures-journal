@@ -5,6 +5,13 @@ import { useTheme, type Theme } from "@/lib/theme";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
+interface ExportMode {
+  section: 'positions' | 'orders';
+  step: 0 | 1 | 2; // 0=시작선택 1=종료선택 2=형식선택
+  startTs: number | null;
+  endTs: number | null;
+}
+
 interface ParsedOrder {
   id: string; date: string; sym: string;
   dir: 'long' | 'short' | 'unknown';
@@ -277,9 +284,23 @@ export default function DashboardContent() {
 
   const [interval, setAutoInterval] = useState('60');
   const [memoModal, setMemoModal] = useState<{ id: string; src: 'pos' | 'plan' } | null>(null);
+  const [exportMode, setExportMode] = useState<ExportMode | null>(null);
+  const [exportLoading, setExportLoading] = useState(false);
 
   useEffect(() => {
     setAutoInterval(localStorage.getItem('fj_interval') || '60');
+  }, []);
+
+  // export 선택 모드 감지 (settings/export 에서 진입)
+  useEffect(() => {
+    const raw = sessionStorage.getItem('fjExportSelect');
+    if (!raw) return;
+    try {
+      const { section } = JSON.parse(raw) as { section: 'positions' | 'orders' };
+      setExportMode({ section, step: 0, startTs: null, endTs: null });
+      setSubTab(section);
+      setMainTab('history');
+    } catch {}
   }, []);
 
   const loadMemos = useCallback(async () => {
@@ -309,17 +330,39 @@ export default function DashboardContent() {
   }, [mode, days, cStart, cEnd]);
 
   const fetchOrders = useCallback(async (s: number, e: number) => {
-    const res = await fetch(`/api/bitget/orders?startTime=${s}&endTime=${e}&limit=100`);
-    const json = await res.json();
-    if (!json.success) throw new Error(json.message);
-    return parseOrders(json.data?.data?.fillList || json.data?.data?.fills || []);
+    const all: AnyRecord[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 50; page++) {
+      const p = new URLSearchParams({ startTime: String(s), endTime: String(e), limit: '100', ...(cursor ? { idLessThan: cursor } : {}) });
+      const res  = await fetch(`/api/bitget/orders?${p}`);
+      const json = await res.json();
+      if (!json.success) throw new Error(json.message);
+      const list: AnyRecord[] = json.data?.data?.fillList || json.data?.data?.fills || [];
+      all.push(...list);
+      if (list.length < 100) break;
+      cursor = list[list.length - 1]?.orderId;
+      if (!cursor) break;
+      await new Promise(r => setTimeout(r, 150));
+    }
+    return parseOrders(all);
   }, []);
 
   const fetchPositions = useCallback(async (s: number, e: number) => {
-    const res = await fetch(`/api/bitget/position-history?startTime=${s}&endTime=${e}&limit=100`);
-    const json = await res.json();
-    if (!json.success) throw new Error(json.message);
-    return parsePosHist(json.data?.data?.list || []);
+    const all: AnyRecord[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 50; page++) {
+      const p = new URLSearchParams({ startTime: String(s), endTime: String(e), limit: '100', ...(cursor ? { idLessThan: cursor } : {}) });
+      const res  = await fetch(`/api/bitget/position-history?${p}`);
+      const json = await res.json();
+      if (!json.success) throw new Error(json.message);
+      const list: AnyRecord[] = json.data?.data?.list || [];
+      all.push(...list);
+      if (list.length < 100) break;
+      cursor = list[list.length - 1]?.positionId;
+      if (!cursor) break;
+      await new Promise(r => setTimeout(r, 150));
+    }
+    return parsePosHist(all);
   }, []);
 
   const showStatus = (msg: string, type: string, autoClear = false) => {
@@ -434,6 +477,50 @@ export default function DashboardContent() {
     return p ? `<strong style="color:#f0f0f0">${p.sym}</strong> &nbsp; ${p.date} &nbsp;|&nbsp; ${p.side} &nbsp;|&nbsp; Net PnL: ${pnlSpan(p.net)}` : memoModal.id;
   };
 
+  // ── Export 선택 모드 핸들러 ────────────────────────────────────────────────────
+  const handleRowDoubleClick = (rawTime: number) => {
+    if (!exportMode) return;
+    if (exportMode.step === 0) {
+      setExportMode({ ...exportMode, step: 1, startTs: rawTime });
+    } else if (exportMode.step === 1) {
+      setExportMode({ ...exportMode, step: 2, endTs: rawTime });
+    }
+  };
+
+  const handleExportDownload = async (format: 'excel' | 'csv') => {
+    if (!exportMode?.startTs || !exportMode?.endTs) return;
+    setExportLoading(true);
+    try {
+      const from = new Date(Math.min(exportMode.startTs, exportMode.endTs)).toISOString();
+      const to   = new Date(Math.max(exportMode.startTs, exportMode.endTs)).toISOString();
+      const url  = format === 'excel'
+        ? `/api/export/excel?type=${exportMode.section}&from=${from}&to=${to}`
+        : `/api/export/csv?type=${exportMode.section}&from=${from}&to=${to}`;
+      const res  = await fetch(url);
+      if (!res.ok) { showStatus('다운로드 실패', 'error'); return; }
+      const blob  = await res.blob();
+      const cd    = res.headers.get('Content-Disposition') ?? '';
+      const fname = cd.match(/filename="([^"]+)"/)?.[1] ?? `export.${format === 'excel' ? 'xlsx' : 'csv'}`;
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fname; a.click(); URL.revokeObjectURL(a.href);
+      sessionStorage.removeItem('fjExportSelect');
+      setExportMode(null);
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
+  const exportRowCls = (rowTime: number) => {
+    if (!exportMode) return '';
+    if (rowTime === exportMode.startTs) return 'bg-blue-500/20 outline outline-1 outline-blue-400';
+    if (rowTime === exportMode.endTs)   return 'bg-amber-500/20 outline outline-1 outline-amber-400';
+    if (exportMode.startTs && exportMode.endTs) {
+      const lo = Math.min(exportMode.startTs, exportMode.endTs);
+      const hi = Math.max(exportMode.startTs, exportMode.endTs);
+      if (rowTime > lo && rowTime < hi) return 'bg-green-500/5';
+    }
+    return '';
+  };
+
   // Filtered & paginated data
   const filtO = orders.filter(o => (!oSym || o.sym === oSym) && (!oSide || o.dir === oSide) && (!oType || o.type === oType));
   const filtP = positions.filter(p => (!pSym || p.sym === pSym) && (!pSide || p.side === pSide));
@@ -464,7 +551,46 @@ export default function DashboardContent() {
   };
 
   return (
-    <div>
+    <div className={exportMode ? 'pt-16' : ''}>
+      {/* Export 선택 모드 고정 배너 */}
+      {exportMode && (
+        <div className="fixed top-[52px] left-0 right-0 z-50 bg-blue-950 border-b-2 border-blue-400 px-6 py-3 flex items-center gap-4 shadow-xl">
+          <span className="text-sm font-semibold text-blue-200 shrink-0">
+            {exportMode.step === 0 && '시작 시점으로 선택할 항목을 더블클릭 하세요'}
+            {exportMode.step === 1 && '종료 시점으로 선택할 항목을 더블클릭 하세요'}
+            {exportMode.step === 2 && '형식을 고르세요'}
+          </span>
+          {exportMode.step === 1 && exportMode.startTs && (
+            <span className="text-xs text-blue-300 shrink-0">
+              시작: {new Date(exportMode.startTs).toLocaleString('ko-KR')}
+            </span>
+          )}
+          {exportMode.step === 2 && exportMode.startTs && exportMode.endTs && (
+            <span className="text-xs text-gray-300 shrink-0">
+              {new Date(Math.min(exportMode.startTs, exportMode.endTs)).toLocaleDateString('ko-KR')}
+              {' ~ '}
+              {new Date(Math.max(exportMode.startTs, exportMode.endTs)).toLocaleDateString('ko-KR')}
+            </span>
+          )}
+          {exportMode.step === 2 && (
+            <>
+              <button onClick={() => handleExportDownload('excel')} disabled={exportLoading}
+                className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors">
+                {exportLoading ? '생성중...' : 'Excel'}
+              </button>
+              <button onClick={() => handleExportDownload('csv')} disabled={exportLoading}
+                className="px-4 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors">
+                {exportLoading ? '생성중...' : 'CSV'}
+              </button>
+            </>
+          )}
+          <button onClick={() => { sessionStorage.removeItem('fjExportSelect'); setExportMode(null); }}
+            className="ml-auto text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded">
+            ✕ 취소
+          </button>
+        </div>
+      )}
+
       {/* Nav tabs */}
       <div className="flex gap-1 mb-5 bg-gray-900 rounded-lg p-1 w-fit border border-gray-800">
         {tabBtn('history', '매매 내역')}
@@ -579,7 +705,9 @@ export default function DashboardContent() {
                       ) : oItems.map(o => {
                         const isClose = o.type === 'close';
                         return (
-                          <tr key={o.id} className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors">
+                          <tr key={o.id}
+                            onDoubleClick={() => handleRowDoubleClick(o.rawTime)}
+                            className={`border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors ${exportMode ? 'cursor-pointer select-none' : ''} ${exportRowCls(o.rawTime)}`}>
                             <td className="py-2.5 px-3 text-gray-500 whitespace-nowrap">{o.date}</td>
                             <td className="py-2.5 px-3 font-semibold text-white">{o.sym}</td>
                             <td className="py-2.5 px-3">{badge(o.dir === 'long' ? 'Long' : 'Short', o.dir === 'long')}</td>
@@ -626,7 +754,9 @@ export default function DashboardContent() {
                       {pItems.length === 0 ? (
                         <tr><td colSpan={12} className="py-12 text-center text-gray-600">{loading ? '불러오는 중...' : '포지션 내역이 없습니다'}</td></tr>
                       ) : pItems.map(p => (
-                        <tr key={p.id} className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors">
+                        <tr key={p.id}
+                          onDoubleClick={() => handleRowDoubleClick(p.rawTime)}
+                          className={`border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors ${exportMode ? 'cursor-pointer select-none' : ''} ${exportRowCls(p.rawTime)}`}>
                           <td className="py-2.5 px-3 text-gray-500 whitespace-nowrap">{p.date}</td>
                           <td className="py-2.5 px-3 font-semibold text-white">{p.sym}</td>
                           <td className="py-2.5 px-3">{badge(p.side === 'long' ? 'Long' : 'Short', p.side === 'long')}</td>
