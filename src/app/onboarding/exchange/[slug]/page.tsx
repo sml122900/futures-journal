@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
-import { EXCHANGES, isValidExchange } from "@/lib/exchanges";
+import { EXCHANGES, isValidExchange } from "@/lib/exchange-meta";
 import { notFound } from "next/navigation";
 
 export default function ApiKeyInputPage() {

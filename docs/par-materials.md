@@ -105,6 +105,26 @@
 - **Action**: 서비스 워커 로그 분석으로 /_next/ 청크 캐시가 HMR 신규 청크와 충돌임을 규명. PRECACHE의 /dashboard가 인증 HTML을 캐시해 stale auth 유발도 확인. /_next/ 전면 제외, Cache First → Network First 전환, 개발 모드 자동 SW 해제 3가지 동시 수정
 - **Result**: ERR_FAILED 재현 없음. 개발/프로덕션 SW 동작 분리로 향후 동일 문제 예방
 
+### 다중 거래소 추상화 레이어 설계 (2026-05-12)
+- **Problem**: Bitget에 직접 결합된 1,000줄+ 대시보드 컴포넌트를 파서 변경 없이 Binance까지 지원해야 함
+- **Action**: BaseExchange abstract class + BitgetExchange/BinanceExchange 구현체 + factory 패턴. 추상화 레이어에서 Bitget 호환 필드명으로 정규화해 DashboardContent 파서를 그대로 재사용
+- **Result**: Binance 연동 완료. DashboardContent 파서 코드 변경 0줄. 신규 거래소 추가 시 Exchange 클래스 1개 + factory 1줄만 추가하면 됨
+
+### Binance HEDGE/ONE-WAY 모드 포지션 방향 파악 (2026-05-12)
+- **Problem**: Binance income API(REALIZED_PNL)에는 포지션 방향 없음. 무조건 "long"으로 하드코딩하면 숏 포지션 데이터 오표시
+- **Action**: income 항목과 userTrades를 `tradeId` 우선 매칭, 실패 시 ±5초 + non-zero realizedPnl 조건으로 fallback 매칭. 매칭된 trade의 positionSide(LONG/SHORT/BOTH) + side(BUY/SELL)로 HEDGE/ONE-WAY 모드 모두 처리
+- **Result**: unit test PASS. BTCUSDT HEDGE LONG→"long", ETHUSDT ONE-WAY BUY→"short" 정확히 판별
+
+### 백테스트 Lookahead Bias 방지 설계 (2026-05-12)
+- **Problem**: 캔들 재생 중 진입 버튼을 누르면 현재 캔들의 close 가격으로 진입 → 이미 알고 있는 가격 사용(lookahead bias)
+- **Action**: 진입가 = `candles[revealed].open` (다음 캔들 시가). 마지막 캔들에서는 진입 버튼 disabled + "다음 캔들이 없어 진입 불가" 안내. 진입 모달에 "다음 캔들 시가로 체결" 명시
+- **Result**: 현재 close와 다른 가격으로 체결되어 lookahead bias 제거. 마지막 캔들 엣지케이스까지 차단
+
+### React setState 순수성 위반 수정 (2026-05-12)
+- **Problem**: SL/TP 자동 청산 로직이 `setTrades(prev => { fetch(...) })` 패턴 — React Strict Mode에서 updater 2번 실행되어 API 2번 호출
+- **Action**: `tradesRef`(최신 상태 ref)와 `closingRef`(처리 중 id Set)로 분리. setState updater는 순수 상태 계산만, fetch는 updater 완전 바깥에서 실행
+- **Result**: dev/production 모두 1회 실행 보장, 중복 청산 방지, React 원칙 준수
+
 ### Bitget Hedge Mode fills 방향 식별 (2026-05-08)
 - **Problem**: 롱+숏 동시 보유(hedge mode) 환경에서 리플레이 시 반대 포지션 체결이 혼입됨. `posSide`/`holdSide`/`positionId` 등 일반적인 식별 필드가 fills API 응답에 전혀 없음
 - **Action**: 실제 API 응답 필드 목록 분석으로 `side` 필드가 주문 방향이 아닌 포지션 방향(buy=롱, sell=숏)임을 규명. `o.side === "buy"` 기준으로 롱·숏 완전 분리

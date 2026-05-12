@@ -36,6 +36,8 @@ const MODELS = [
 
 type VoiceState = 'idle' | 'recording' | 'processing';
 
+interface RelatedDiary { id: string; content: string; mood: string | null; createdAt: string; }
+
 interface Props {
   id: string;
   infoLine: string;
@@ -43,10 +45,12 @@ interface Props {
   existing?: MemoSaveData;
   onSave: (d: MemoSaveData) => Promise<void>;
   onClose: () => void;
+  positionTime?: number;
 }
 
-export default function MemoModal({ id, infoLine, title = '포지션 메모', existing, onSave, onClose }: Props) {
+export default function MemoModal({ id, infoLine, title = '포지션 메모', existing, onSave, onClose, positionTime }: Props) {
   const [violations, setViolations] = useState<RuleViolationSummary[]>([]);
+  const [relatedDiaries, setRelatedDiaries] = useState<RelatedDiary[]>([]);
   const [data, setData] = useState<MemoSaveData>({
     reason:     existing?.reason     ?? '',
     exitReason: existing?.exitReason ?? '',
@@ -67,12 +71,21 @@ export default function MemoModal({ id, infoLine, title = '포지션 메모', ex
 
   // 이 포지션의 룰 위반 기록 조회
   useEffect(() => {
-    if (!id || id.startsWith("open_")) return; // 오픈 포지션 ID는 비트겟 positionId 아님
+    if (!id || id.startsWith("open_")) return;
     fetch(`/api/rules/violations?positionId=${encodeURIComponent(id)}`)
       .then((r) => r.json())
       .then((j) => { if (j.success) setViolations(j.data); })
       .catch(() => {});
   }, [id]);
+
+  // 포지션 시각 ±3시간 내 일기 조회
+  useEffect(() => {
+    if (!positionTime) return;
+    fetch(`/api/positions/related-diaries?ts=${positionTime}`)
+      .then((r) => r.json())
+      .then((j) => { if (j.success) setRelatedDiaries(j.data); })
+      .catch(() => {});
+  }, [positionTime]);
 
   // 기본 모델을 localStorage에서 로드
   useEffect(() => {
@@ -187,6 +200,24 @@ export default function MemoModal({ id, infoLine, title = '포지션 메모', ex
           <div className="bg-gray-800 rounded-lg px-3 py-2 text-xs text-gray-400 leading-relaxed"
             dangerouslySetInnerHTML={{ __html: infoLine }} />
         </div>
+
+        {/* 이 시점의 일기 */}
+        {relatedDiaries.length > 0 && (
+          <div className="px-6 pt-3 shrink-0">
+            <div className="bg-gray-800/60 border border-gray-700 rounded-xl px-3 py-2.5">
+              <p className="text-xs font-semibold text-gray-400 mb-2">📝 이 시점의 일기 (±3시간)</p>
+              <div className="space-y-1.5">
+                {relatedDiaries.map((d) => (
+                  <div key={d.id} className="text-xs text-gray-300 leading-relaxed">
+                    <span className="text-gray-500 mr-1.5">{new Date(d.createdAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}</span>
+                    {d.mood && <span className="mr-1.5">{["😌","😰","😎","😨","🤑","😤","😴"][["calm","anxious","confident","fearful","greedy","frustrated","tired"].indexOf(d.mood)] ?? ""}</span>}
+                    {d.content.length > 80 ? d.content.slice(0, 80) + "…" : d.content}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* 룰 위반 경고 배너 */}
         {violations.length > 0 && (

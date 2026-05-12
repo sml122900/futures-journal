@@ -1,6 +1,8 @@
 'use client';
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import MemoModal, { type MemoSaveData } from "./MemoModal";
+import ExchangeSelector from "./ExchangeSelector";
+import DiaryQuickInput from "./DiaryQuickInput";
 import { useTheme, type Theme } from "@/lib/theme";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -283,13 +285,41 @@ export default function DashboardContent() {
   const autoRef = useRef<ReturnType<typeof globalThis.setInterval> | null>(null);
 
   const [interval, setAutoInterval] = useState('60');
-  const [memoModal, setMemoModal] = useState<{ id: string; src: 'pos' | 'plan' } | null>(null);
+  const [memoModal, setMemoModal] = useState<{ id: string; src: 'pos' | 'plan'; time?: number } | null>(null);
   const [exportMode, setExportMode] = useState<ExportMode | null>(null);
   const [exportLoading, setExportLoading] = useState(false);
 
+  // 거래소 선택
+  const [activeExchange, setActiveExchange] = useState('bitget');
+  const [registeredExchanges, setRegisteredExchanges] = useState<string[]>([]);
+
   useEffect(() => {
     setAutoInterval(localStorage.getItem('fj_interval') || '60');
+    setActiveExchange(localStorage.getItem('fj_exchange') || 'bitget');
+    // 등록된 거래소 목록 로드
+    fetch('/api/user/api-key').then(r => r.json()).then(json => {
+      if (json.success) {
+        const exchanges = (json.data.keys ?? []).map((k: { exchange: string }) => k.exchange);
+        setRegisteredExchanges(exchanges);
+        // 저장된 거래소가 없으면 첫 번째 거래소로 설정
+        const saved = localStorage.getItem('fj_exchange');
+        if (!saved && exchanges.length > 0) setActiveExchange(exchanges[0]);
+      }
+    }).catch(() => {});
   }, []);
+
+  const handleExchangeChange = (exchange: string) => {
+    setActiveExchange(exchange);
+    localStorage.setItem('fj_exchange', exchange);
+    // 거래소 변경 시 데이터 초기화 후 재로드
+    setOrders([]); setPositions([]); setBalance(null);
+  };
+
+  // 활성 거래소 API URL prefix 생성
+  const apiUrl = useCallback((path: string, params: URLSearchParams) => {
+    params.set('exchange', activeExchange);
+    return `/api/exchange/${path}?${params.toString()}`;
+  }, [activeExchange]);
 
   // export 선택 모드 감지 (settings/export 에서 진입)
   useEffect(() => {
@@ -317,10 +347,11 @@ export default function DashboardContent() {
 
   const fetchBalance = useCallback(async () => {
     try {
-      const res = await fetch('/api/bitget/balance'); const json = await res.json();
+      const res = await fetch(apiUrl('balance', new URLSearchParams()));
+      const json = await res.json();
       if (json.success && json.data?.data?.[0]) setBalance(json.data.data[0]);
     } catch {}
-  }, []);
+  }, [apiUrl]);
 
   const getRange = useCallback(() => {
     const now = Date.now();
@@ -334,25 +365,25 @@ export default function DashboardContent() {
     let cursor: string | undefined;
     for (let page = 0; page < 50; page++) {
       const p = new URLSearchParams({ startTime: String(s), endTime: String(e), limit: '100', ...(cursor ? { idLessThan: cursor } : {}) });
-      const res  = await fetch(`/api/bitget/orders?${p}`);
+      const res  = await fetch(apiUrl('orders', p));
       const json = await res.json();
       if (!json.success) throw new Error(json.message);
       const list: AnyRecord[] = json.data?.data?.fillList || json.data?.data?.fills || [];
       all.push(...list);
       if (list.length < 100) break;
-      cursor = list[list.length - 1]?.orderId;
+      cursor = list[list.length - 1]?.orderId || list[list.length - 1]?.tradeId;
       if (!cursor) break;
       await new Promise(r => setTimeout(r, 150));
     }
     return parseOrders(all);
-  }, []);
+  }, [apiUrl]);
 
   const fetchPositions = useCallback(async (s: number, e: number) => {
     const all: AnyRecord[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < 50; page++) {
       const p = new URLSearchParams({ startTime: String(s), endTime: String(e), limit: '100', ...(cursor ? { idLessThan: cursor } : {}) });
-      const res  = await fetch(`/api/bitget/position-history?${p}`);
+      const res  = await fetch(apiUrl('position-history', p));
       const json = await res.json();
       if (!json.success) throw new Error(json.message);
       const list: AnyRecord[] = json.data?.data?.list || [];
@@ -363,7 +394,7 @@ export default function DashboardContent() {
       await new Promise(r => setTimeout(r, 150));
     }
     return parsePosHist(all);
-  }, []);
+  }, [apiUrl]);
 
   const showStatus = (msg: string, type: string, autoClear = false) => {
     setStatus({ msg, type });
@@ -409,13 +440,15 @@ export default function DashboardContent() {
 
   const loadOpenPos = useCallback(async () => {
     try {
-      const res = await fetch('/api/bitget/positions'); const json = await res.json();
+      const res = await fetch(apiUrl('positions', new URLSearchParams()));
+      const json = await res.json();
       if (json.success) setOpenPos((json.data?.data || []).filter((p: AnyRecord) => parseFloat(p.total || p.size || '0') > 0));
     } catch {}
-  }, []);
+  }, [apiUrl]);
 
-  // Initial load
+  // Initial load — activeExchange 초기화 후 실행
   useEffect(() => {
+    if (registeredExchanges.length === 0) return; // 거래소 목록 로드 전 대기
     const init = async () => {
       setLoading(true);
       try {
@@ -424,7 +457,7 @@ export default function DashboardContent() {
         const [ord, pos, bal] = await Promise.all([
           fetchOrders(s, now),
           fetchPositions(s, now),
-          fetch('/api/bitget/balance').then(r => r.json()),
+          fetch(apiUrl('balance', new URLSearchParams())).then(r => r.json()),
         ]);
         setOrders(ord);
         setPositions(pos);
@@ -434,7 +467,27 @@ export default function DashboardContent() {
       loadMemos();
     };
     init();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [registeredExchanges]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 거래소 변경 시 데이터 재로드
+  const exchangeRef = useRef(activeExchange);
+  useEffect(() => {
+    if (exchangeRef.current === activeExchange) return;
+    exchangeRef.current = activeExchange;
+    if (registeredExchanges.length === 0) return;
+    const range = getRange();
+    if (!range) return;
+    setLoading(true);
+    Promise.all([
+      fetchOrders(range.s, range.e),
+      fetchPositions(range.s, range.e),
+      fetch(apiUrl('balance', new URLSearchParams())).then(r => r.json()),
+    ]).then(([ord, pos, bal]) => {
+      setOrders(ord); setPositions(pos); setPPage(1); setOPage(1);
+      if (bal.success && bal.data?.data?.[0]) setBalance(bal.data.data[0]);
+      setLastUpd('업데이트: ' + new Date().toLocaleTimeString('ko-KR'));
+    }).catch(() => {}).finally(() => setLoading(false));
+  }, [activeExchange]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-load on days/mode change (preset only)
   const firstRender = useRef(true);
@@ -591,12 +644,22 @@ export default function DashboardContent() {
         </div>
       )}
 
-      {/* Nav tabs */}
-      <div className="flex gap-1 mb-5 bg-gray-900 rounded-lg p-1 w-fit border border-gray-800">
-        {tabBtn('history', '매매 내역')}
-        {tabBtn('openpos', '현재 포지션')}
-        {tabBtn('settings', '설정')}
+      {/* Nav tabs + Exchange selector */}
+      <div className="flex items-center gap-3 mb-5 flex-wrap">
+        <div className="flex gap-1 bg-gray-900 rounded-lg p-1 w-fit border border-gray-800">
+          {tabBtn('history', '매매 내역')}
+          {tabBtn('openpos', '현재 포지션')}
+          {tabBtn('settings', '설정')}
+        </div>
+        <ExchangeSelector
+          registeredExchanges={registeredExchanges}
+          activeExchange={activeExchange}
+          onChange={handleExchangeChange}
+        />
       </div>
+
+      {/* 빠른 일기 입력 */}
+      {mainTab === 'history' && <DiaryQuickInput />}
 
       {/* ── 매매 내역 ─────────────────────────────────────── */}
       {mainTab === 'history' && (
@@ -770,7 +833,7 @@ export default function DashboardContent() {
                             <PnlTooltip net={p.net} detail={<>PnL: {f4(p.pnl)}<br />Funding: {f4(p.funding)}<br />Fee: {p.totalFee.toFixed(4)}<br />Net PnL: {f4(p.net)}</>} />
                           </td>
                           <td className="py-2.5 px-3">
-                            <button onClick={() => setMemoModal({ id: p.id, src: 'pos' })}
+                            <button onClick={() => setMemoModal({ id: p.id, src: 'pos', time: p.rawTime })}
                               className={`px-2 py-1 rounded text-xs border transition-colors ${memos[p.id] ? 'border-green-600 text-green-400 bg-green-900/30' : 'border-gray-700 text-gray-500 hover:border-gray-500 hover:text-gray-300'}`}>
                               {memos[p.id] ? '✓ Memo' : '+ Memo'}
                             </button>
@@ -871,6 +934,7 @@ export default function DashboardContent() {
           existing={memos[memoModal.id]}
           onSave={handleMemoSave}
           onClose={() => setMemoModal(null)}
+          positionTime={memoModal.time}
         />
       )}
     </div>

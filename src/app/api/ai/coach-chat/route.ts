@@ -61,17 +61,35 @@ export async function POST(req: NextRequest) {
     select: { role: true, content: true },
   });
 
-  // 최근 심리 컨텍스트
-  const recentMemos = await prisma.memo.findMany({
-    where: { userId, psych: { not: "" } },
-    orderBy: { updatedAt: "desc" },
-    take: 5,
-    select: { psych: true },
-  });
+  // 최근 심리 컨텍스트 (메모 + 최근 7일 일기)
+  const [recentMemos, recentDiaries] = await Promise.all([
+    prisma.memo.findMany({
+      where: { userId, psych: { not: "" } },
+      orderBy: { updatedAt: "desc" },
+      take: 5,
+      select: { psych: true },
+    }),
+    prisma.tradingDiary.findMany({
+      where: { userId, createdAt: { gte: new Date(Date.now() - 7 * 86400000) } },
+      orderBy: { createdAt: "desc" },
+      take: 7,
+      select: { mood: true, content: true, createdAt: true },
+    }),
+  ]);
 
-  const context = recentMemos.length
-    ? `[사용자 최근 심리 상태: ${recentMemos.map((m) => m.psych).join(", ")}]`
+  const memoContext = recentMemos.length
+    ? `[최근 심리 메모: ${recentMemos.map((m) => m.psych).join(", ")}]`
     : "";
+
+  const diaryContext = recentDiaries.length
+    ? `[최근 7일 일기 요약]\n${recentDiaries.map((d) => {
+        const mood = d.mood ? `(${d.mood}) ` : "";
+        const preview = d.content.length > 100 ? d.content.slice(0, 100) + "…" : d.content;
+        return `- ${d.createdAt.toISOString().slice(0, 10)} ${mood}${preview}`;
+      }).join("\n")}`
+    : "";
+
+  const context = [memoContext, diaryContext].filter(Boolean).join("\n\n");
 
   const messages: { role: "user" | "assistant"; content: string }[] = [
     ...history.reverse().map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),

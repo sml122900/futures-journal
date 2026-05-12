@@ -31,6 +31,8 @@ model User {
   subscription  Subscription?
   sessions      Session[]
   accounts      Account[]
+  diaries       TradingDiary[]
+  backtestSessions BacktestSession[]
 }
 
 // NextAuth Prisma Adapter 필수 모델
@@ -198,4 +200,55 @@ model AIReport {
   createdAt   DateTime @default(now())
 
   @@index([userId, type, createdAt])
+}
+
+model TradingDiary {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content   String
+  mood      String?
+  tags      String[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt])
+}
+
+model BacktestSession {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  symbol      String
+  startTime   BigInt
+  endTime     BigInt
+  initialSeed Float    @default(1000)
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  completedAt DateTime?
+
+  trades      BacktestTrade[]
+
+  @@index([userId, createdAt])
+}
+
+model BacktestTrade {
+  id          String          @id @default(cuid())
+  sessionId   String
+  session     BacktestSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  side        String
+  entryPrice  Float
+  exitPrice   Float?
+  size        Float
+  leverage    Float           @default(1)
+  entryTime   BigInt
+  exitTime    BigInt?
+  pnl         Float?
+  status      String          @default("open")
+  stopLoss    Float?
+  takeProfit  Float?
+  closeReason String?
+
+  @@index([sessionId, entryTime])
 }

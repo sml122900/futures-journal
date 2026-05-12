@@ -38,6 +38,7 @@ export function buildWeeklyReportPrompt(data: {
   symbolStats: Array<{ symbol: string; trades: number; winRate: number; avgRoi: number; totalPnl: number }>;
   violations: Array<{ ruleType: string; count: number }>;
   memoSamples: Array<{ reason: string; psych: string; exitReason: string }>;
+  diaries?: Array<{ createdAt: string; mood: string | null; content: string; tags: string[] }>;
 }): string {
   const DAY = ["일", "월", "화", "수", "목", "금", "토"];
 
@@ -63,6 +64,14 @@ export function buildWeeklyReportPrompt(data: {
     .map((m) => `  - 진입: ${m.reason || "없음"} / 심리: ${m.psych || "없음"} / 청산: ${m.exitReason || "없음"}`)
     .join("\n");
 
+  const diaryLines = (data.diaries ?? []).slice(0, 7)
+    .map((d) => {
+      const mood = d.mood ? `[${d.mood}] ` : "";
+      const content = d.content.length > 100 ? d.content.slice(0, 100) + "…" : d.content;
+      return `  - ${d.createdAt.slice(0, 10)} ${mood}${content}`;
+    })
+    .join("\n");
+
   return `분석 기간: ${data.period.start} ~ ${data.period.end}
 
 == 기본 통계 ==
@@ -84,6 +93,10 @@ ${violationLines}
 
 == 메모 샘플 ==
 ${memoLines || "  (메모 없음)"}
+
+== 매매 심리 일기 ==
+${diaryLines || "  (일기 없음)"}
+${diaryLines ? "\n위 일기를 참고해 특정 mood가 매매 성과에 어떤 영향을 미쳤는지 분석하고, 심리 개선 조언을 포함하세요." : ""}
 
 위 데이터를 바탕으로 주간 리포트 JSON을 생성하세요.`;
 }

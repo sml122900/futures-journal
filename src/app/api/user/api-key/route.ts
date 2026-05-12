@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 import { encrypt } from "@/lib/encrypt";
-import { isValidExchange } from "@/lib/exchanges";
+import { isValidExchange } from "@/lib/exchange-meta";
 
 /** API 키 등록 여부 확인 */
 export async function GET() {
@@ -65,6 +65,30 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, data: saved });
   } catch (error) {
     console.error("[api-key POST]", error);
+    return NextResponse.json({ success: false, message: "서버 오류" }, { status: 500 });
+  }
+}
+
+/** API 키 삭제 */
+export async function DELETE(req: NextRequest) {
+  try {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return NextResponse.json({ success: false, message: "인증 필요" }, { status: 401 });
+    }
+
+    const { exchange } = await req.json();
+    if (!exchange || !isValidExchange(exchange)) {
+      return NextResponse.json({ success: false, message: "유효하지 않은 거래소입니다" }, { status: 400 });
+    }
+
+    await prisma.apiKey.delete({
+      where: { userId_exchange: { userId: session.user.id, exchange } },
+    });
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("[api-key DELETE]", error);
     return NextResponse.json({ success: false, message: "서버 오류" }, { status: 500 });
   }
 }

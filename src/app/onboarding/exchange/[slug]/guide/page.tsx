@@ -1,7 +1,7 @@
 import { auth } from "@/lib/auth";
 import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
-import { EXCHANGES, isValidExchange } from "@/lib/exchanges";
+import { EXCHANGES, isValidExchange } from "@/lib/exchange-meta";
 
 export default async function GuidePage({ params }: { params: Promise<{ slug: string }> }) {
   const session = await auth();

@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 
 interface Props {
-  active: "dashboard" | "stats" | "rules";
+  active: "dashboard" | "stats" | "rules" | "diary" | "backtest";
 }
 
 export default function NavLinks({ active }: Props) {
@@ -30,6 +30,8 @@ export default function NavLinks({ active }: Props) {
     <nav className="flex items-center gap-1">
       <Link href="/dashboard" className={linkCls("dashboard")}>대시보드</Link>
       <Link href="/stats" className={linkCls("stats")}>통계</Link>
+      <Link href="/diary" className={linkCls("diary")}>일기</Link>
+      <Link href="/backtest" className={linkCls("backtest")}>백테스트</Link>
 
       {/* 룰 드롭다운 */}
       <div className="relative" ref={ref}>
