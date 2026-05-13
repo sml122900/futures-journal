@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
-  createChart, IChartApi, ISeriesApi,
-  CandlestickSeries, CandlestickData, Time,
+  createChart, IChartApi, ISeriesApi, IPriceLine,
+  CandlestickSeries, CandlestickData, Time, LineWidth,
   createSeriesMarkers,
 } from "lightweight-charts";
 
@@ -22,6 +22,7 @@ interface BTTrade {
 
 const SPEED_MS = { 1: 300, 2: 150, 4: 75, 8: 35 } as const;
 const FEE_RATE = 0.0004;
+const BT_TF_OPTIONS = ["1m", "5m", "15m", "1H", "4H", "1D"] as const;
 
 function fmtPrice(n: number) {
   const abs = Math.abs(n);
@@ -48,6 +49,7 @@ export default function BacktestPlayer({ sessionId }: { sessionId: string }) {
   const [trades,    setTrades]    = useState<BTTrade[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState("");
+  const [tf,        setTf]        = useState<string>("5m");
 
   // Entry modal
   const [entryModal, setEntryModal] = useState(false);
@@ -60,6 +62,7 @@ export default function BacktestPlayer({ sessionId }: { sessionId: string }) {
   const timerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
   const tradesRef  = useRef<BTTrade[]>(trades);      // setState 바깥에서 trades 읽기용
   const closingRef = useRef(new Set<string>());       // 중복 청산 방지
+  const avgLineRef = useRef<IPriceLine | null>(null); // 평단가 수평선
 
   // Load session + candles
   useEffect(() => {
@@ -77,7 +80,7 @@ export default function BacktestPlayer({ sessionId }: { sessionId: string }) {
         // Load candles via exchange/candles (using active exchange from localStorage or default bitget)
         const exchange = localStorage.getItem("fj_exchange") ?? "bitget";
         const cRes = await fetch(
-          `/api/exchange/candles?symbol=${s.symbol}&tf=5m&from=${s.startTime}&to=${s.endTime}&exchange=${exchange}`
+          `/api/exchange/candles?symbol=${s.symbol}&tf=${tf}&from=${s.startTime}&to=${s.endTime}&exchange=${exchange}`
         );
         const cJson = await cRes.json();
         if (!cJson.success) { setError("캔들 데이터를 불러올 수 없습니다"); return; }
@@ -90,7 +93,7 @@ export default function BacktestPlayer({ sessionId }: { sessionId: string }) {
       }
     };
     load();
-  }, [sessionId]);
+  }, [sessionId, tf]);
 
   // Init chart
   useEffect(() => {
@@ -102,7 +105,7 @@ export default function BacktestPlayer({ sessionId }: { sessionId: string }) {
       rightPriceScale: { borderColor: "#1f2937" },
       timeScale: { borderColor: "#1f2937", timeVisible: true },
       width: chartRef.current.clientWidth,
-      height: 400,
+      height: chartRef.current.clientHeight || 400,
     });
     const cs = chart.addSeries(CandlestickSeries, {
       upColor: "#4ade80", downColor: "#f87171",
@@ -113,12 +116,16 @@ export default function BacktestPlayer({ sessionId }: { sessionId: string }) {
     chartInst.current = chart;
     seriesRef.current = cs;
     markersRef.current = markers;
+    avgLineRef.current = cs.createPriceLine({ price: 0, color: "#60a5fa", lineWidth: 1 as LineWidth, lineStyle: 2, title: "" });
 
     const ro = new ResizeObserver(() => {
-      if (chartRef.current) chart.applyOptions({ width: chartRef.current.clientWidth });
+      if (chartRef.current) {
+        const h = chartRef.current.clientHeight;
+        chart.applyOptions({ width: chartRef.current.clientWidth, height: h || 400 });
+      }
     });
     ro.observe(chartRef.current);
-    return () => { ro.disconnect(); chart.remove(); chartInst.current = null; };
+    return () => { ro.disconnect(); chart.remove(); chartInst.current = null; avgLineRef.current = null; };
   }, []);
 
   // tradesRef 동기화 (setState 외부에서 trades 읽기 위해)
@@ -148,6 +155,22 @@ export default function BacktestPlayer({ sessionId }: { sessionId: string }) {
     });
     markersRef.current.setMarkers(ms.sort((a, b) => (a.time as number) - (b.time as number)));
   }, [trades, candles]);
+
+  // 오픈 포지션 평단가 라인 업데이트
+  useEffect(() => {
+    if (!avgLineRef.current) return;
+    const ot = trades.find(t => t.status === "open");
+    if (ot && ot.entryPrice > 0) {
+      const color = ot.side === "long" ? "#22d3ee" : "#fb7185";
+      avgLineRef.current.applyOptions({
+        price: ot.entryPrice, color,
+        lineWidth: 1 as LineWidth, lineStyle: 2,
+        title: `Entry ${fmtPrice(ot.entryPrice)}`,
+      });
+    } else {
+      avgLineRef.current.applyOptions({ price: 0, title: "" });
+    }
+  }, [trades]);
 
   // SL/TP 자동 청산 체크 — setState 외부에서 fetch, closingRef로 중복 방지
   const checkAutoClose = useCallback((candleIdx: number) => {
@@ -236,6 +259,37 @@ export default function BacktestPlayer({ sessionId }: { sessionId: string }) {
       - openTrade.entryPrice * openTrade.size * FEE_RATE
     : null;
 
+  const handleSeek = (newValue: number) => {
+    const wasPlaying = playing;
+    if (playing) setPlaying(false);
+    if (newValue < revealed && trades.length > 0) {
+      const newCandleTime = candles[newValue - 1]?.time ?? 0;
+      const future = trades.filter(t => t.entryTime > newCandleTime * 1000);
+      if (future.length > 0) {
+        if (!confirm(`${future.length}개의 가상 거래가 삭제됩니다. 계속하시겠습니까?`)) {
+          if (wasPlaying) setPlaying(true);
+          return;
+        }
+        setTrades(prev => prev.filter(t => t.entryTime <= newCandleTime * 1000));
+      }
+    }
+    setRevealed(newValue);
+  };
+
+  const handleReset = () => {
+    if (trades.length > 0) {
+      if (!confirm("처음으로 이동하면 모든 가상 거래가 초기화됩니다. 계속하시겠습니까?")) return;
+      setTrades([]);
+    }
+    setPlaying(false);
+    setRevealed(0);
+  };
+
+  const handleSkipEnd = () => {
+    setPlaying(false);
+    setRevealed(candles.length);
+  };
+
   const handleEntry = async () => {
     if (!canEnter || !entryTime || !entryPrice) return;
     setEntryModal(false);
@@ -313,9 +367,40 @@ export default function BacktestPlayer({ sessionId }: { sessionId: string }) {
         {/* Chart area */}
         <div className="flex-1 flex flex-col">
           <div ref={chartRef} className="flex-1" />
+          {/* 진행 슬라이더 */}
+          <div className="border-t border-gray-800 px-4 py-2">
+            {(() => {
+              const pct = candles.length > 0 ? (revealed / candles.length) * 100 : 0;
+              return (
+                <input type="range" min={0} max={candles.length} value={revealed}
+                  onChange={e => handleSeek(parseInt(e.target.value))}
+                  className="w-full h-1 accent-green-500"
+                  style={{ background: `linear-gradient(to right, #22c55e ${pct}%, #374151 ${pct}%)` }}
+                />
+              );
+            })()}
+            <div className="flex justify-between text-xs text-gray-600 mt-0.5">
+              <span>{candles[0] ? new Date(candles[0].time * 1000).toLocaleDateString("ko-KR") : "-"}</span>
+              <span>{revealed} / {candles.length}</span>
+              <span>{candles[candles.length - 1] ? new Date(candles[candles.length - 1].time * 1000).toLocaleDateString("ko-KR") : "-"}</span>
+            </div>
+          </div>
+
           {/* Controls */}
-          <div className="border-t border-gray-800 p-4 flex items-center justify-between flex-wrap gap-3">
-            <div className="text-sm text-gray-400">
+          <div className="border-t border-gray-800 px-4 py-3 flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-2">
+              <button onClick={handleReset} title="처음으로" className="text-gray-400 hover:text-white text-lg leading-none">⏮</button>
+              <button onClick={handleSkipEnd} title="끝으로" className="text-gray-400 hover:text-white text-lg leading-none">⏭</button>
+              <div className="flex gap-1 ml-1">
+                {BT_TF_OPTIONS.map(t => (
+                  <button key={t} onClick={() => setTf(t)}
+                    className={`px-2 py-0.5 rounded text-xs border transition-colors ${tf === t ? "border-green-500 text-green-400 bg-green-900/30" : "border-gray-700 text-gray-500 hover:border-gray-500"}`}>
+                    {t}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="text-sm text-gray-400 shrink-0">
               {currentCandle ? `${new Date(currentCandle.time * 1000).toLocaleString("ko-KR")} · ${fmtPrice(currentPrice)}` : "재생 시작"}
             </div>
             <div className="flex gap-2">

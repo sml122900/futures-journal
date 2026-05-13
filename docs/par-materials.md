@@ -125,6 +125,26 @@
 - **Action**: `tradesRef`(최신 상태 ref)와 `closingRef`(처리 중 id Set)로 분리. setState updater는 순수 상태 계산만, fetch는 updater 완전 바깥에서 실행
 - **Result**: dev/production 모두 1회 실행 보장, 중복 청산 방지, React 원칙 준수
 
+### 텔레그램 봇 알림 시스템 구축 (2026-05-14)
+- **Problem**: 룰 위반, 큰 손실, 청산 위험 등 중요 이벤트를 사용자가 앱을 열지 않으면 인지하지 못함. 실시간 알림 채널 부재
+- **Action**: 텔레그램 Bot API 연동. 6자리 코드 연동 방식(10분 만료), 6종 알림 함수(try/catch + 1시간 dedup), MarkdownV2 `esc()` 헬퍼로 특수문자 자동 이스케이프. 6개 핵심 이벤트(룰위반/큰손실/청산위험/메모리마인더/주간리포트/마일스톤)에 non-blocking 통합
+- **Result**: Prisma 스키마 1개 추가, API 5개, cron 1개, UI 설정 페이지. 알림 실패가 서버 오류로 전파되지 않는 구조
+
+### Telegram MarkdownV2 파서 혼용 버그 수정 (2026-05-14)
+- **Problem**: webhook 메시지에 MarkdownV2 이스케이프(`\\!` `\\.`)를 사용했지만 `parseMode: "Markdown"` v1으로 발송 → 텔레그램에서 백슬래시가 그대로 렌더링됨
+- **Action**: `"MarkdownV2"` 타입 추가, 전체 sendTelegramMessage 기본값 통일. `notification-templates.ts`에 `esc()` 헬퍼(`String(v).replace(/[_*\[\]()~\`>#+\-=|{}.!]/g, "\\$&")`) 구축. 6개 템플릿 정적 텍스트 수동 이스케이프 + 동적 값(심볼·가격·퍼센트) 자동 이스케이프
+- **Result**: 모든 텔레그램 메시지 정상 렌더링, parseMode 일관성 확보
+
+### 멀티 거래소 리플레이 Binance 지원 (2026-05-14)
+- **Problem**: 거래소 추상화 레이어(`/api/exchange/*`) 구축 후에도 리플레이 페이지가 `/api/bitget/*` 직접 호출 — Binance 사용자 400 에러로 사용 불가. 추가로 Binance fill 방향 필드명이 Bitget(`o.side: "buy"|"sell"`)과 다름(`o.posSide: "long"|"short"`)
+- **Action**: `localStorage.getItem("fj_exchange")`로 활성 거래소 결정 → `/api/exchange/*?exchange=${exch}` 통합 라우트로 교체. fill 필터에 `|| oPosSide === side` 조건 추가로 양쪽 필드명 동시 지원
+- **Result**: Binance 사용자 리플레이 정상 동작, Bitget 기존 동작 유지, 추후 거래소 추가 시 코드 변경 없음
+
+### 백테스트 인터랙션 개선 — seek + TF 선택 + 평단가 라인 (2026-05-14)
+- **Problem**: 백테스트 플레이어에 진행 슬라이더·TF 선택·평단가 라인 없어 실전 차트 도구 대비 조작성 열위. 차트 높이 400px 픽셀 고정으로 대형 화면 레이아웃 깨짐
+- **Action**: seek 슬라이더 + ⏮⏩ 버튼 추가 (후방 seek 시 미래 거래 삭제 확인 모달). `tf` state + `BT_TF_OPTIONS` + `[sessionId, tf]` deps로 TF 변경 시 캔들 재로드. `IPriceLine` + `avgLineRef` + trades useEffect로 평단가 동적 라인. `ResizeObserver`에 height 갱신 추가
+- **Result**: 백테스트 인터랙션 대폭 향상. lookahead bias 방지 로직(기존 구현) 유지하면서 seek 구현
+
 ### Bitget Hedge Mode fills 방향 식별 (2026-05-08)
 - **Problem**: 롱+숏 동시 보유(hedge mode) 환경에서 리플레이 시 반대 포지션 체결이 혼입됨. `posSide`/`holdSide`/`positionId` 등 일반적인 식별 필드가 fills API 응답에 전혀 없음
 - **Action**: 실제 API 응답 필드 목록 분석으로 `side` 필드가 주문 방향이 아닌 포지션 방향(buy=롱, sell=숏)임을 규명. `o.side === "buy"` 기준으로 롱·숏 완전 분리

@@ -17,7 +17,7 @@ interface Fill {
   cumulativeSize: number;
 }
 
-const TF_OPTIONS = ["1m", "3m", "5m", "15m", "30m", "1H", "4H"] as const;
+const TF_OPTIONS = ["1m", "3m", "5m", "15m", "30m", "1H", "4H", "1D"] as const;
 const SPEED_MS: Record<number, number> = { 1: 200, 2: 100, 4: 50, 8: 25 };
 
 
@@ -54,12 +54,19 @@ function pnlColor(n: number) { return n > 0 ? "#4ade80" : n < 0 ? "#f87171" : "#
 
 // ── Fill card ─────────────────────────────────────────────────────────────────
 
-function FillCard({ fill, active, future, utcOffset }: { fill: Fill; active: boolean; future: boolean; utcOffset: number }) {
+function FillCard({ fill, active, future, utcOffset, onSeek }: {
+  fill: Fill; active: boolean; future: boolean; utcOffset: number; onSeek: () => void;
+}) {
   const isBuy = fill.isBuy;
   return (
-    <div className={`px-3 py-2.5 border-b border-gray-800 transition-colors text-xs ${
-      active ? "bg-gray-700/60" : future ? "opacity-30" : "bg-transparent"
-    }`}>
+    <div
+      onClick={onSeek}
+      role="button" tabIndex={0}
+      onKeyDown={e => { if (e.key === "Enter" || e.key === " ") onSeek(); }}
+      className={`px-3 py-2.5 border-b border-gray-800 transition-colors text-xs cursor-pointer ${
+        active ? "bg-gray-700/60" : future ? "opacity-30 hover:opacity-50" : "hover:bg-gray-800/50"
+      }`}
+    >
       <div className="flex items-center justify-between mb-1">
         <span className="font-semibold" style={{ color: isBuy ? "#4ade80" : "#f87171" }}>
           {fill.label}
@@ -91,6 +98,11 @@ function ReplayInner() {
   const label = params.get("label") ?? sym;
   const posId = params.get("posId") ?? "";
 
+  // 활성 거래소 — localStorage에서 읽어 고정 (리플레이 중 변경 없음)
+  const [exchange] = useState<string>(() =>
+    typeof window !== "undefined" ? (localStorage.getItem("fj_exchange") ?? "bitget") : "bitget"
+  );
+
   const [tf, setTf] = useState(() => recommendTf(Math.max(to - from, 3_600_000)));
   const [candles, setCandles] = useState<Candle[]>([]);
   const [fills, setFills] = useState<Fill[]>([]);
@@ -120,7 +132,7 @@ function ReplayInner() {
 
   // ── Fetch ────────────────────────────────────────────────────────────────────
 
-  const fetchData = useCallback(async (newTf: string) => {
+  const fetchData = useCallback(async (newTf: string, exch: string) => {
     if (!sym) return;
     setLoading(true); setError("");
 
@@ -128,7 +140,9 @@ function ReplayInner() {
       // fills: 포지션 시작 5분 전 ~ 종료 5분 후 (인접 포지션 혼입 최소화)
       const fillStart = from - 5 * 60_000;
       const fillEnd   = to   + 5 * 60_000;
-      const fillRes = await fetch(`/api/bitget/orders?startTime=${fillStart}&endTime=${fillEnd}&limit=200`).then(r => r.json());
+      const fillRes = await fetch(
+        `/api/exchange/orders?startTime=${fillStart}&endTime=${fillEnd}&limit=200&exchange=${exch}`
+      ).then(r => r.json());
       const rawOrders: Record<string, unknown>[] =
         fillRes.data?.data?.fillList ?? fillRes.data?.data?.fills ?? [];
       const cleanSym = sym.replace("_UMCBL","").replace("_USDT-FUTURES","").toUpperCase();
@@ -136,14 +150,13 @@ function ReplayInner() {
       let cumSize = 0;
       const parsedFills: Fill[] = rawOrders
         .filter(o => {
-          // 심볼 매칭
           const symMatch = (o.symbol as string || "").replace("_UMCBL","").replace("_USDT-FUTURES","").toUpperCase() === cleanSym;
           if (!symMatch) return false;
-
-          // Bitget fills API에서 side = 포지션 방향 (buy=롱, sell=숏)
-          // tradeSide = 거래 방향 (open=진입, close=청산)
-          const oSide = (o.side as string || "").toLowerCase();
-          return oSide === (side === "long" ? "buy" : "sell");
+          // Bitget: o.side = "buy"(롱) / "sell"(숏) 포지션 방향
+          // Binance: o.posSide = "long" / "short" 포지션 방향
+          const oSide    = (o.side    as string || "").toLowerCase();
+          const oPosSide = (o.posSide as string || "").toLowerCase();
+          return oSide === (side === "long" ? "buy" : "sell") || oPosSide === side;
         })
         .sort((a, b) => parseInt(a.cTime as string || "0") - parseInt(b.cTime as string || "0"))
         .map((o, i) => {
@@ -154,7 +167,6 @@ function ReplayInner() {
           const t      = parseInt(o.cTime as string || o.ctime as string || "0");
 
           const isOpen = tradeSide === "open";
-          // open=진입(Buy), close=청산(Sell) — 롱/숏 공통
           const isBuy  = isOpen;
           const label  = isOpen ? `Open ${dirLabel}` : `Close ${dirLabel}`;
           let type: Fill["type"];
@@ -164,9 +176,6 @@ function ReplayInner() {
         });
       setFills(parsedFills);
 
-      // fills 기반 실제 범위 계산
-      // actualFrom: 첫 fill 시각 (없으면 URL의 from)
-      // actualTo:   마지막 fill 시각 (CLOSE 여부 무관) — 이게 핵심 수정
       const firstFill = parsedFills[0];
       const lastFill  = parsedFills[parsedFills.length - 1];
       const actualFrom = firstFill?.time || from;
@@ -174,11 +183,12 @@ function ReplayInner() {
       setPosFrom(actualFrom);
       setPosTo(actualTo);
 
-      // 캔들: 진입 전 5분 ~ 마지막 체결 후 최소 30분 확보
       const prepad  = 60 * 60_000;
       const postpad = 60 * 60_000;
 
-      const candleRes = await fetch(`/api/bitget/candles?symbol=${sym}&tf=${newTf}&from=${actualFrom - prepad}&to=${actualTo + postpad}`).then(r => r.json());
+      const candleRes = await fetch(
+        `/api/exchange/candles?symbol=${sym}&tf=${newTf}&from=${actualFrom - prepad}&to=${actualTo + postpad}&exchange=${exch}`
+      ).then(r => r.json());
       if (!candleRes.success) throw new Error(candleRes.message);
       setCandles(candleRes.candles ?? []);
     } catch (e) {
@@ -188,7 +198,7 @@ function ReplayInner() {
     }
   }, [sym, from, to, side]);
 
-  useEffect(() => { fetchData(tf); }, [tf]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchData(tf, exchange); }, [fetchData, tf, exchange]);
 
   // ── Chart init ───────────────────────────────────────────────────────────────
 
@@ -357,12 +367,13 @@ function ReplayInner() {
   const activeFills = fills.filter(f => Math.floor(f.time / 1000) <= currentTime);
   const activeFillIds = new Set(activeFills.map(f => f.id));
 
-  // 사이드바 자동 스크롤
+  // 사이드바 자동 스크롤 — 마지막 active fill ID 기준으로 정확히 감지
+  const lastActiveFillId = activeFills[activeFills.length - 1]?.id ?? null;
   useEffect(() => {
     if (!sidebarRef.current) return;
     const lastActive = sidebarRef.current.querySelector('[data-active="true"]');
     if (lastActive) lastActive.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, [activeFillIds.size]);
+  }, [lastActiveFillId]);
 
   // ── Seek ─────────────────────────────────────────────────────────────────────
 
@@ -448,7 +459,13 @@ function ReplayInner() {
               const isCurrent = isActive && (i === activeFills.length - 1);
               return (
                 <div key={f.id} data-active={isCurrent ? "true" : "false"}>
-                  <FillCard fill={f} active={isCurrent} future={!isActive} utcOffset={utcOffset} />
+                  <FillCard
+                    fill={f} active={isCurrent} future={!isActive} utcOffset={utcOffset}
+                    onSeek={() => {
+                      const ci = candles.findIndex(c => c.time * 1000 >= f.time);
+                      handleSeek(ci >= 0 ? ci : 0);
+                    }}
+                  />
                 </div>
               );
             })}

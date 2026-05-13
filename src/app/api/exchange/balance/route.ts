@@ -18,6 +18,21 @@ export async function GET(req: NextRequest) {
     }
 
     const balance = await inst.getBalance();
+
+    // 청산 위험 감지: crossedRiskRate >= 0.7이면 알림
+    try {
+      const riskRate = parseFloat(String(balance.crossedRiskRate ?? 0));
+      if (riskRate >= 0.7) {
+        const { notifyLiquidationRisk } = await import("@/lib/notifications");
+        notifyLiquidationRisk(session.user.id, {
+          symbol: "전체 계좌",
+          mmr: riskRate,
+          liqPrice: 0,
+          currentPrice: 0,
+        }).catch(() => {});
+      }
+    } catch { /* 알림 실패해도 응답에 영향 없음 */ }
+
     // Bitget /api/bitget/balance 와 동일한 응답 구조: { data: { data: [balance] } }
     return NextResponse.json({ success: true, data: { data: [balance] } });
   } catch (error) {

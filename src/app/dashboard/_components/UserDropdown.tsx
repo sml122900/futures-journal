@@ -67,6 +67,7 @@ export default function UserDropdown({ name, email, exchange }: Props) {
             {menuItem("/settings/profile", "👤", "회원정보 수정")}
             {menuItem("/onboarding/exchange", "🔑", "API 키 관리")}
             {menuItem("/settings/ai", "🤖", "AI 설정")}
+            {menuItem("/settings/notifications", "🔔", "알림 설정")}
             {menuItem("/settings/export", "📥", "데이터 내보내기")}
             {menuItem("/milestones", "🏆", "마일스톤")}
             {menuItem("/coach", "💬", "AI 코치")}

@@ -33,6 +33,7 @@ model User {
   accounts      Account[]
   diaries       TradingDiary[]
   backtestSessions BacktestSession[]
+  notificationSetting NotificationSetting?
 }
 
 // NextAuth Prisma Adapter 필수 모델
@@ -251,4 +252,25 @@ model BacktestTrade {
   closeReason String?
 
   @@index([sessionId, entryTime])
+}
+
+model NotificationSetting {
+  id              String    @id @default(cuid())
+  userId          String    @unique
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  telegramChatId  String?
+  telegramLinked  Boolean   @default(false)
+  linkCode        String?
+  linkCodeExpiresAt DateTime?
+  emailEnabled    Boolean   @default(true)
+  ruleViolation   Boolean   @default(true)
+  largeLoss       Boolean   @default(true)
+  liquidationRisk Boolean   @default(true)
+  memoReminder    Boolean   @default(false)
+  weeklyReport    Boolean   @default(true)
+  milestoneAlert  Boolean   @default(true)
+  largeLossLastSentAt   DateTime?
+  liquidationLastSentAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 }

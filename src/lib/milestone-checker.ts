@@ -84,6 +84,16 @@ export async function checkAndAwardMilestones(
     skipDuplicates: true,
   });
 
+  // 알림 발송 (non-blocking)
+  const { notifyMilestone } = await import("./notifications");
+  const { MILESTONE_META } = await import("./milestones");
+  for (const type of toAward) {
+    const meta = MILESTONE_META[type];
+    if (meta) {
+      notifyMilestone(userId, { type, label: meta.label, icon: meta.icon }).catch(() => {});
+    }
+  }
+
   return toAward;
 }
 

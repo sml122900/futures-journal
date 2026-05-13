@@ -118,13 +118,27 @@ export async function GET(req: NextRequest) {
           reportContent = buildFreeReport(stats, periodStr);
         }
 
-        await prisma.aIReport.create({
+        const report = await prisma.aIReport.create({
           data: {
             userId: user.id, type: "weekly_report",
             periodStart: new Date(weekStart), periodEnd: new Date(now),
             content: reportContent,
           },
         });
+
+        // 텔레그램 알림 (non-blocking)
+        const { notifyWeeklyReport } = await import("@/lib/notifications");
+        const summary = stats.summary;
+        // reportContent.summary.totalPnlPercent 가 있으면 전달, 없으면 생략 (템플릿이 gracefully 처리)
+        const rc = reportContent as Record<string, unknown>;
+        const rcSummary = rc.summary as Record<string, unknown> | undefined;
+        const pnlPercent = typeof rcSummary?.totalPnlPercent === "number" ? rcSummary.totalPnlPercent : undefined;
+        notifyWeeklyReport(user.id, report.id, {
+          totalPnl: summary.totalPnl,
+          winRate: summary.winRate,
+          trades: summary.totalTrades,
+          pnlPercent,
+        }).catch(() => {});
 
         generated++;
       } catch (userErr) {

@@ -258,7 +258,7 @@ export async function recordViolations(
 }
 
 /**
- * 현재 오픈 포지션 전체에 대해 활성 룰 검사 + 위반 기록
+ * 현재 오픈 포지션 전체에 대해 활성 룰 검사 + 위반 기록 + 알림
  * 포지션 API 응답 후 백그라운드에서 호출됨
  */
 export async function checkAllPositions(
@@ -284,4 +284,15 @@ export async function checkAllPositions(
   }
 
   await recordViolations(userId, toRecord);
+
+  // 신규 위반에 대해 알림 발송 (non-blocking)
+  if (toRecord.length) {
+    const { notifyRuleViolation } = await import("./notifications");
+    for (const { rule, positionId } of toRecord) {
+      const pos = positions.find((p) => resolvePositionId(p) === positionId);
+      if (pos) {
+        notifyRuleViolation(userId, rule, { symbol: pos.symbol, side: pos.holdSide }).catch(() => {});
+      }
+    }
+  }
 }
