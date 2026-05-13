@@ -149,3 +149,8 @@
 - **Problem**: 롱+숏 동시 보유(hedge mode) 환경에서 리플레이 시 반대 포지션 체결이 혼입됨. `posSide`/`holdSide`/`positionId` 등 일반적인 식별 필드가 fills API 응답에 전혀 없음
 - **Action**: 실제 API 응답 필드 목록 분석으로 `side` 필드가 주문 방향이 아닌 포지션 방향(buy=롱, sell=숏)임을 규명. `o.side === "buy"` 기준으로 롱·숏 완전 분리
 - **Result**: hedge mode에서 롱/숏 포지션 리플레이 정확히 분리, 반대 포지션 체결 혼입 문제 해결
+
+### Supabase RLS 전체 테이블 활성화 (2026-05-14)
+- **Problem**: Supabase Security Advisor가 public 스키마 전체 테이블의 RLS 미활성화 경고 발행. 프로젝트가 `db push` 방식으로 운영 중이라 migration history가 없어 `prisma migrate deploy`로 적용 불가
+- **Action**: `prisma db execute --file migration.sql`로 18개 테이블 `ENABLE ROW LEVEL SECURITY` 직접 실행. 정책(Policy)은 미추가 — Prisma service role 연결은 RLS를 우회하므로 기존 기능 무영향
+- **Result**: Supabase Security Advisor 경고 해소, anon/authenticated 역할의 직접 테이블 접근 차단. 앱 기능 전혀 변화 없음
