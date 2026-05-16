@@ -3,7 +3,7 @@
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
 const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
-type InlineButton = { text: string; url?: string; callback_data?: string };
+export type InlineButton = { text: string; url?: string; callback_data?: string };
 
 export async function sendTelegramMessage(
   chatId: string,
@@ -59,6 +59,22 @@ export async function setWebhook(url: string): Promise<boolean> {
     return res.ok;
   } catch (err) {
     console.error("[telegram] setWebhook error", err);
+    return false;
+  }
+}
+
+export async function answerCallbackQuery(
+  callbackQueryId: string,
+  text?: string
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/answerCallbackQuery`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ callback_query_id: callbackQueryId, text, show_alert: !!text }),
+    });
+    return res.ok;
+  } catch {
     return false;
   }
 }

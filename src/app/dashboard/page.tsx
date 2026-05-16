@@ -8,6 +8,7 @@ import NavLinks from "@/components/NavLinks";
 import RiskMonitor from "./_components/RiskMonitor";
 import MilestoneShowcase from "./_components/MilestoneShowcase";
 import AICoachWidget from "./_components/AICoachWidget";
+import { RestModeToggle } from "./_components/RestModeToggle";
 
 export default async function DashboardPage() {
   const session = await auth();
@@ -42,8 +43,11 @@ export default async function DashboardPage() {
       </header>
 
       <main className="max-w-6xl mx-auto px-6 py-6">
-        <div className="space-y-4">
+        <div className="space-y-3">
           <RiskMonitor />
+          <div className="flex justify-end">
+            <RestModeToggle />
+          </div>
         </div>
         <div className="mt-4 flex gap-4 items-start">
           <div className="flex-1 min-w-0">

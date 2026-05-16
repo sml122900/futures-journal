@@ -1,7 +1,7 @@
 // 텔레그램 Webhook 수신 핸들러
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { sendTelegramMessage } from "@/lib/telegram";
+import { sendTelegramMessage, answerCallbackQuery } from "@/lib/telegram";
 
 const APP_URL = process.env.NEXTAUTH_URL ?? "https://futures-journal.vercel.app";
 
@@ -16,14 +16,69 @@ interface TgMessage {
   text?: string;
 }
 
+interface TgCallbackQuery {
+  id: string;
+  from: { id: number };
+  data?: string;
+}
+
 interface TgUpdate {
   update_id: number;
   message?: TgMessage;
+  callback_query?: TgCallbackQuery;
 }
 
 export async function POST(req: NextRequest) {
   try {
     const body: TgUpdate = await req.json();
+
+    // callback_query 처리 (인라인 버튼 클릭)
+    if (body.callback_query) {
+      const cq = body.callback_query;
+      const data = cq.data ?? "";
+      const fromChatId = String(cq.from.id);
+
+      const setting = await prisma.notificationSetting.findFirst({
+        where: { telegramChatId: fromChatId },
+      });
+      if (setting) {
+        if (data.startsWith("emergency_close_")) {
+          const sessionId = data.replace("emergency_close_", "");
+          const sess = await prisma.emergencyAlertSession.findUnique({ where: { id: sessionId } });
+          if (sess && sess.userId === setting.userId && !sess.cancelledAt) {
+            await prisma.emergencyAlertSession.update({
+              where: { id: sessionId },
+              data:  { userAction: "user_closing", cancelledAt: new Date() },
+            });
+            await prisma.emergencyScheduledAlert.updateMany({
+              where: { sessionId, status: "pending" },
+              data:  { status: "cancelled" },
+            });
+            await answerCallbackQuery(cq.id, "잘 결정하셨습니다. 비트겟 앱으로 이동해서 청산하세요.");
+          } else {
+            await answerCallbackQuery(cq.id);
+          }
+        } else if (data.startsWith("emergency_keep_")) {
+          const sessionId = data.replace("emergency_keep_", "");
+          const sess = await prisma.emergencyAlertSession.findUnique({ where: { id: sessionId } });
+          if (sess && sess.userId === setting.userId) {
+            await prisma.emergencyAlertSession.update({
+              where: { id: sessionId },
+              data:  { userAction: "kept" },
+            });
+            await answerCallbackQuery(cq.id, "이 매매는 사후 회고 대상으로 기록됩니다.");
+          } else {
+            await answerCallbackQuery(cq.id);
+          }
+        } else {
+          await answerCallbackQuery(cq.id);
+        }
+      } else {
+        await answerCallbackQuery(cq.id);
+      }
+      return NextResponse.json({ ok: true });
+    }
+
     const message = body.message;
     if (!message?.text) return NextResponse.json({ ok: true });
 

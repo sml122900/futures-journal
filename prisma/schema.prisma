@@ -33,7 +33,11 @@ model User {
   accounts      Account[]
   diaries       TradingDiary[]
   backtestSessions BacktestSession[]
-  notificationSetting NotificationSetting?
+  notificationSetting  NotificationSetting?
+  baselines            UserBaseline[]
+  emergencySessions    EmergencyAlertSession[]
+  restDeclarations     RestDeclaration[]
+  emergencySetting     EmergencySetting?
 }
 
 // NextAuth Prisma Adapter 필수 모델
@@ -273,4 +277,88 @@ model NotificationSetting {
   liquidationLastSentAt DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+}
+
+model UserBaseline {
+  id                    String   @id @default(cuid())
+  userId                String
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  exchange              String
+  avgPositionSize       Float    @default(0)
+  medianPositionSize    Float    @default(0)
+  avgRoi                Float    @default(0)
+  consecutiveProfitDays Int      @default(0)
+  riskyHours            Json     @default("[]")
+  riskyDaysOfWeek       Json     @default("[]")
+  sampleSize            Int      @default(0)
+  lastCalculatedAt      DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([userId, exchange])
+  @@index([userId])
+}
+
+model EmergencyAlertSession {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  positionId     String
+  exchange       String
+  symbol         String
+  side           String
+  size           Float
+  sizeMultiplier Float
+  level          Int
+  triggers       Json
+  context        Json
+  startedAt      DateTime @default(now())
+  alertsSent     Int      @default(0)
+  userAction     String?
+  cancelledAt    DateTime?
+
+  scheduledAlerts EmergencyScheduledAlert[]
+
+  @@index([userId, startedAt])
+}
+
+model EmergencyScheduledAlert {
+  id          String                @id @default(cuid())
+  sessionId   String
+  session     EmergencyAlertSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  step        Int
+  scheduledAt DateTime
+  sentAt      DateTime?
+  status      String               @default("pending")
+
+  @@index([status, scheduledAt])
+}
+
+model RestDeclaration {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  declaredAt  DateTime  @default(now())
+  expiresAt   DateTime
+  reason      String?
+  cancelledAt DateTime?
+
+  @@index([userId, expiresAt])
+}
+
+model EmergencySetting {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  enabled         Boolean  @default(true)
+  level1Threshold Float    @default(1.5)
+  level2Threshold Float    @default(2.0)
+  level3Threshold Float    @default(5.0)
+  activeHoursOnly Boolean  @default(false)
+  activeHourStart Int      @default(0)
+  activeHourEnd   Int      @default(23)
+  customMessage   String?
+  pausedUntil     DateTime?
+  pauseReason     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }

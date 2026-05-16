@@ -154,3 +154,18 @@
 - **Problem**: Supabase Security Advisor가 public 스키마 전체 테이블의 RLS 미활성화 경고 발행. 프로젝트가 `db push` 방식으로 운영 중이라 migration history가 없어 `prisma migrate deploy`로 적용 불가
 - **Action**: `prisma db execute --file migration.sql`로 18개 테이블 `ENABLE ROW LEVEL SECURITY` 직접 실행. 정책(Policy)은 미추가 — Prisma service role 연결은 RLS를 우회하므로 기존 기능 무영향
 - **Result**: Supabase Security Advisor 경고 해소, anon/authenticated 역할의 직접 테이블 접근 차단. 앱 기능 전혀 변화 없음
+
+### Emergency Brake — 뇌동매매 감지 다단계 텔레그램 알림 시스템 (2026-05-17)
+- **Problem**: 충동 매매 감지 후 1회 알림만으로는 사용자가 무시하는 경우가 많음. 30초~5분에 걸쳐 6개 메시지를 연속 발송하는 시퀀스가 필요했으나, Vercel serverless 환경에서 setTimeout은 프로세스 종료와 함께 소멸
+- **Action**: DB 큐 패턴 설계 — `EmergencyScheduledAlert` 테이블에 각 step의 `scheduledAt`을 저장, 매분 cron이 due 알림을 조회해 발송. 포지션 청산 감지 시 자동 취소, Step7에서 실시간 PnL 조회 후 동적 메시지 생성
+- **Result**: Vercel 무료 플랜에서 7단계 알림 시퀀스 구현. 사용자의 청산 버튼 클릭 → 즉각 후속 취소 + 칭찬 메시지 플로우 완성
+
+### UserBaseline 통계 기반 false positive 최소화 (2026-05-17)
+- **Problem**: 단순히 "평소보다 2배 크면 경고" 로직은 거래량이 들쑥날쑥한 트레이더에게 false positive가 많음. 특히 과거에 고액 거래가 한 번이라도 있으면 avg가 올라가 실제 이상 진입을 감지 못함
+- **Action**: 최근 30일 종료 포지션을 `getClosedPositions(limit:200)`으로 수집, `max(avgPositionSize, medianPositionSize)` 기준값 사용. sampleSize < 5이면 미발동. riskyHours/riskyDaysOfWeek는 "3건 이상 + 손실률 60%+"인 경우에만 리스키로 분류
+- **Result**: false positive 최소화. 신규 사용자 보호(5건 미만) + 이상치 내성(median 기준) + 행동 패턴 기반 위험 시간대 감지
+
+### Emergency Brake 인라인 버튼 callback 처리 (2026-05-17)
+- **Problem**: 텔레그램 인라인 버튼 클릭(callback_query) 처리가 기존 webhook에 없었음. 청산 버튼 클릭 시 후속 알림 6개를 즉시 취소해야 하는 트랜잭션적 요구사항
+- **Action**: webhook/route.ts에 `callback_query` 분기 추가. `emergency_close_` 클릭 시 DB에서 해당 세션의 pending 알림 전체 updateMany(cancelled), `answerCallbackQuery`로 즉각 팝업 응답. `emergency_keep_` 클릭 시 userAction 기록 후 후속 유지
+- **Result**: 버튼 클릭 즉시 피드백 + 세션 상태 정확히 추적. Telegram 10초 내 answerCallbackQuery 미호출 시 "loading..." 표시 버그 방지
