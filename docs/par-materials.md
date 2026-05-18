@@ -165,6 +165,16 @@
 - **Action**: 최근 30일 종료 포지션을 `getClosedPositions(limit:200)`으로 수집, `max(avgPositionSize, medianPositionSize)` 기준값 사용. sampleSize < 5이면 미발동. riskyHours/riskyDaysOfWeek는 "3건 이상 + 손실률 60%+"인 경우에만 리스키로 분류
 - **Result**: false positive 최소화. 신규 사용자 보호(5건 미만) + 이상치 내성(median 기준) + 행동 패턴 기반 위험 시간대 감지
 
+### Vercel Hobby 플랜 Cron 제약 우회 (2026-05-19)
+- **Problem**: emergency-queue(매 5분 필요)를 vercel.json에 등록했으나 Hobby 플랜 하루 1회 제한으로 배포 오류. `*/5 * * * *`도 거부됨
+- **Action**: vercel.json에서 해당 항목 제거. `/api/cron/emergency-queue` 라우트는 그대로 유지하고 외부 스케줄러(cron-job.org 무료)에서 HTTP GET으로 직접 호출하는 구조로 이관
+- **Result**: 코드 변경 0줄로 스케줄러 교체 완료. 배포 오류 해소, 5분 간격 외부 트리거로 동일 동작 유지
+
+### Vercel 배포 환경 점검 체계화 (2026-05-19)
+- **Problem**: Vercel 배포 전 .env 노출 여부, prisma generate 누락, NEXTAUTH_URL 플레이스홀더 등 다수 항목 점검 필요. 놓치면 배포 후 런타임 오류 또는 보안 노출
+- **Action**: 점검 항목 체계화 — git ls-files/log/status 3단계 .env 검사, `prisma generate && next build` 스크립트 통합, 환경변수 13개 변경 필요 여부 분류표 작성, CRON_SECRET/NEXTAUTH_SECRET 신규 생성
+- **Result**: 배포 전 보안 이슈 0건, 빌드 성공(77페이지), 환경변수 목록 완비
+
 ### Emergency Brake 인라인 버튼 callback 처리 (2026-05-17)
 - **Problem**: 텔레그램 인라인 버튼 클릭(callback_query) 처리가 기존 webhook에 없었음. 청산 버튼 클릭 시 후속 알림 6개를 즉시 취소해야 하는 트랜잭션적 요구사항
 - **Action**: webhook/route.ts에 `callback_query` 분기 추가. `emergency_close_` 클릭 시 DB에서 해당 세션의 pending 알림 전체 updateMany(cancelled), `answerCallbackQuery`로 즉각 팝업 응답. `emergency_keep_` 클릭 시 userAction 기록 후 후속 유지
