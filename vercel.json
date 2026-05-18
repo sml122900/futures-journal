@@ -15,10 +15,6 @@
     {
       "path": "/api/cron/baseline-update",
       "schedule": "0 15 * * *"
-    },
-    {
-      "path": "/api/cron/emergency-queue",
-      "schedule": "*/5 * * * *"
     }
   ]
 }
