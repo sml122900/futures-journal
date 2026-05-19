@@ -81,14 +81,27 @@ export async function recalculateBaseline(
     return null;
   }
 
-  // Bitget: marginSize, openTime(ms), cTime(ms), netProfit
-  // Binance: initialMargin, openTimeStamp(ms), cTime(ms), netProfit
+  // 실제 Bitget history API 응답 필드 (소문자):
+  //   ctime   = 포지션 오픈 시각(ms)
+  //   utime   = 포지션 클로즈 시각(ms)
+  //   openTotalPos = 계약 수량 (BTC 단위)
+  //   openAvgPrice = 진입 평균가 (USDT)
+  //   netProfit    = 순손익 (USDT)
+  // Binance 응답: initialMargin, openTimeStamp, cTime, totalProfits
   const positions = rawPositions
     .map((p) => {
-      const size = parseFloat(String(p.marginSize ?? p.initialMargin ?? 0));
-      const profit = parseFloat(String(p.netProfit ?? p.totalProfits ?? 0));
-      const openTimeMs = parseInt(String(p.openTime ?? p.openTimeStamp ?? p.cTime ?? 0));
-      const closeTimeMs = parseInt(String(p.closeTime ?? p.cTime ?? 0));
+      // 포지션 가치(USDT) = 계약수 * 진입가  (Bitget) 또는 marginSize / initialMargin (기타)
+      const bitgetNotional =
+        p.openTotalPos && p.openAvgPrice
+          ? parseFloat(String(p.openTotalPos)) * parseFloat(String(p.openAvgPrice))
+          : 0;
+      const size = parseFloat(String(p.marginSize ?? p.initialMargin ?? bitgetNotional ?? 0));
+
+      const profit      = parseFloat(String(p.netProfit ?? p.totalProfits ?? p.pnl ?? 0));
+      // Bitget: ctime=오픈, utime=클로즈 / 기타: openTime / openTimeStamp / cTime
+      const openTimeMs  = parseInt(String(p.ctime ?? p.openTime ?? p.openTimeStamp ?? p.cTime ?? 0));
+      const closeTimeMs = parseInt(String(p.utime ?? p.closeTime ?? p.cTime ?? 0));
+
       return { size, profit, openTimeMs, closeTimeMs, roi: size > 0 ? profit / size : 0 };
     })
     .filter((p) => p.size > 0 && p.closeTimeMs > 0);
