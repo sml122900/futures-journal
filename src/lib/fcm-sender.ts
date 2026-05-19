@@ -72,10 +72,6 @@ export async function sendEmergencyPush(
         },
         android: {
           priority: "high",
-          notification: {
-            channelId: "emergency",
-            visibility: "public",
-          },
         },
       });
       await prisma.deviceRegistration.update({
