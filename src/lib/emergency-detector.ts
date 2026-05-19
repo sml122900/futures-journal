@@ -62,8 +62,12 @@ export async function detectEmergency(
     l3: setting?.level3Threshold ?? 5.0,
   };
 
-  // false positive 방지: avg와 median 중 큰 값 기준
-  const referenceSize = Math.max(baseline.avgPositionSize, baseline.medianPositionSize);
+  // median 우선 (avg는 큰 거래 1~2개로 왜곡될 수 있음)
+  // median이 없으면 avg의 30%로 보정 (극단값 영향 축소)
+  const referenceSize =
+    baseline.medianPositionSize > 0
+      ? baseline.medianPositionSize
+      : baseline.avgPositionSize * 0.3;
   if (referenceSize <= 0) return empty;
 
   const sizeMultiplier = position.size / referenceSize;
