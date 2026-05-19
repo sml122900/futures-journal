@@ -2,6 +2,7 @@
 import prisma from "@/lib/prisma";
 import { sendTelegramMessage } from "@/lib/telegram";
 import { getSequenceForLevel } from "@/lib/emergency-templates";
+import { sendEmergencyPush } from "@/lib/fcm-sender";
 import type { EmergencyDecision } from "@/lib/emergency-detector";
 import type { EmergencyContext } from "@/lib/emergency-templates";
 
@@ -61,6 +62,21 @@ export async function startEmergencySequence(
       data:  { alertsSent: 1 },
     });
   } catch { /* 발송 실패 시 세션은 유지, 이후 cron이 재시도 가능 */ }
+
+  // FCM 푸시 (안드로이드 앱) — level 2 이상
+  if (decision.level >= 2) {
+    sendEmergencyPush(userId, {
+      sessionId: session.id,
+      level: decision.level,
+      symbol: position.symbol,
+      side: position.side,
+      size: position.size,
+      sizeMultiplier: decision.context.sizeMultiplier,
+      triggers: decision.triggers,
+      forceSentence: "원칙을 지켜야 살아남는다",
+      countdown: 60,
+    }).catch((e) => console.error("[FCM] sendEmergencyPush error", e));
+  }
 
   // 나머지 step DB 예약
   for (const step of sequence.slice(1)) {
