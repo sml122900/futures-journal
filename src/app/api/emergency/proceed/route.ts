@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { authenticateExtension } from "@/lib/extension-auth";
 
-/** POST /api/emergency/proceed — Android 앱에서 타이핑 통과 후 진행 */
+/** POST /api/emergency/proceed — Android 앱 또는 Chrome 확장에서 타이핑 통과 후 진행 */
 export async function POST(req: NextRequest) {
   try {
     const authHeader = req.headers.get("Authorization");
@@ -10,7 +11,11 @@ export async function POST(req: NextRequest) {
     }
     const token = authHeader.slice(7);
 
-    const user = await prisma.user.findUnique({ where: { androidAuthToken: token } });
+    let user = await prisma.user.findUnique({ where: { androidAuthToken: token } });
+    if (!user) {
+      const extUser = await authenticateExtension(req);
+      if (extUser) user = await prisma.user.findUnique({ where: { id: extUser.id } });
+    }
     if (!user) {
       return NextResponse.json({ success: false, message: "유효하지 않은 토큰" }, { status: 401 });
     }

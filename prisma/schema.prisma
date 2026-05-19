@@ -40,6 +40,7 @@ model User {
   restDeclarations     RestDeclaration[]
   emergencySetting     EmergencySetting?
   deviceRegistrations  DeviceRegistration[]
+  extensionTokens      ExtensionToken[]
 }
 
 // NextAuth Prisma Adapter 필수 모델
@@ -304,7 +305,8 @@ model EmergencyAlertSession {
   id             String   @id @default(cuid())
   userId         String
   user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  positionId     String
+  positionId     String?  // null for Chrome extension (pre-order intercept)
+  source         String   @default("android")  // "android" | "chrome-extension"
   exchange       String
   symbol         String
   side           String
@@ -313,6 +315,7 @@ model EmergencyAlertSession {
   level          Int
   triggers       Json
   context        Json
+  forceSentence  String?  // 강제 타이핑 문장 (EmergencySetting.customMessage override)
   startedAt      DateTime @default(now())
   alertsSent     Int      @default(0)
   userAction     String?
@@ -321,6 +324,20 @@ model EmergencyAlertSession {
   scheduledAlerts EmergencyScheduledAlert[]
 
   @@index([userId, startedAt])
+}
+
+model ExtensionToken {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token      String    @unique
+  name       String?
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+  revokedAt  DateTime?
+
+  @@index([token])
+  @@index([userId])
 }
 
 model EmergencyScheduledAlert {
