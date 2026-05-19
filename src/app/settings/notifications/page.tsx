@@ -36,6 +36,9 @@ export default function NotificationsPage() {
   const [testSending, setTestSending] = useState(false);
   const [status, setStatus] = useState<{ msg: string; ok: boolean } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [androidToken, setAndroidToken] = useState<string | null>(null);
+  const [androidLoading, setAndroidLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -112,6 +115,47 @@ export default function NotificationsPage() {
     } catch {
       setSettings(settings); // 실패 시 롤백
     }
+  };
+
+  const handleIssueToken = async () => {
+    setAndroidLoading(true);
+    try {
+      const res = await fetch("/api/users/android-token");
+      const json = await res.json();
+      if (json.success) setAndroidToken(json.token);
+      else showStatus("토큰 발급 실패", false);
+    } catch {
+      showStatus("오류가 발생했습니다", false);
+    } finally {
+      setAndroidLoading(false);
+    }
+  };
+
+  const handleReissueToken = async () => {
+    if (!confirm("기존 토큰이 무효화됩니다. 재발급할까요?")) return;
+    setAndroidLoading(true);
+    try {
+      const res = await fetch("/api/users/android-token", { method: "POST" });
+      const json = await res.json();
+      if (json.success) {
+        setAndroidToken(json.token);
+        setCopied(false);
+        showStatus("토큰이 재발급됐습니다", true);
+      } else {
+        showStatus("재발급 실패", false);
+      }
+    } catch {
+      showStatus("오류가 발생했습니다", false);
+    } finally {
+      setAndroidLoading(false);
+    }
+  };
+
+  const handleCopyToken = async () => {
+    if (!androidToken) return;
+    await navigator.clipboard.writeText(androidToken);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const handleTest = async () => {
@@ -230,6 +274,56 @@ export default function NotificationsPage() {
               className="w-full text-sm bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg transition-colors"
             >
               {linking ? "코드 생성 중..." : "텔레그램 연동하기"}
+            </button>
+          )}
+        </div>
+
+        {/* Android 앱 연동 섹션 */}
+        <div className="bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded-xl p-5">
+          <div className="flex items-center gap-3 mb-4">
+            <span className="text-2xl">📱</span>
+            <div>
+              <h2 className="font-semibold text-[var(--text-primary)]">Android 앱 연동</h2>
+              <p className="text-xs text-[var(--text-secondary)]">Futures Journal Android 앱에서 사용할 토큰입니다</p>
+            </div>
+            {androidToken && (
+              <span className="ml-auto text-xs bg-green-500/10 text-green-400 border border-green-500/30 px-2 py-1 rounded-full">
+                토큰 발급됨
+              </span>
+            )}
+          </div>
+
+          {androidToken ? (
+            <div className="space-y-3">
+              <div className="flex gap-2">
+                <input
+                  readOnly
+                  value={androidToken}
+                  className="flex-1 text-xs font-mono bg-[var(--bg-primary)] border border-[var(--border-primary)] text-[var(--text-primary)] px-3 py-2 rounded-lg"
+                />
+                <button
+                  onClick={handleCopyToken}
+                  className="text-sm bg-[var(--bg-primary)] hover:bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border border-[var(--border-primary)] px-3 py-2 rounded-lg transition-colors whitespace-nowrap"
+                >
+                  {copied ? "✓ 복사됨" : "복사"}
+                </button>
+              </div>
+              <p className="text-xs text-[var(--text-secondary)]">이 토큰을 앱의 로그인 화면에 입력하세요</p>
+              <button
+                onClick={handleReissueToken}
+                disabled={androidLoading}
+                className="text-sm bg-[var(--bg-primary)] hover:bg-red-500/10 text-red-400 border border-[var(--border-primary)] px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+              >
+                {androidLoading ? "처리 중..." : "재발급 (기존 토큰 무효화)"}
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={handleIssueToken}
+              disabled={androidLoading}
+              className="w-full text-sm bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg transition-colors"
+            >
+              {androidLoading ? "발급 중..." : "토큰 발급"}
             </button>
           )}
         </div>
