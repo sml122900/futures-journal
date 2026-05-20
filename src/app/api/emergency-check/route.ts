@@ -2,7 +2,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { authenticateExtension } from "@/lib/extension-auth";
-import { detectEmergency } from "@/lib/emergency-detector";
+import { computeEmergency } from "@/lib/emergency-detector";
 import prisma from "@/lib/prisma";
 
 const TRIGGER_LABELS: Record<string, string> = {
@@ -21,21 +21,26 @@ export async function POST(req: NextRequest) {
     console.log(`[emergency-check] ${label}: ${Date.now() - t0}ms`);
 
   try {
-    // ① 인증
-    const user = await authenticateExtension(req);
+    // ① Batch 1: 인증 + body 파싱 (병렬 — 헤더/body 독립적으로 읽을 수 있음)
+    const [user, body] = await Promise.all([
+      authenticateExtension(req),
+      req.json(),
+    ]);
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    lap("auth");
+    lap("auth+body");
 
-    const body = await req.json();
     const { symbol, side, size, exchange = "bitget", source = "chrome-extension" } = body;
-
     if (!symbol || !side || !size) {
       return NextResponse.json({ error: "symbol, side, size 필요" }, { status: 400 });
     }
 
-    // ② EmergencySetting 선제 조회 (detectEmergency 내부 중복 방지 + 조기 종료)
-    const setting = await prisma.emergencySetting.findUnique({ where: { userId: user.id } });
-    lap("setting");
+    // ② Batch 2: setting + baseline + activeRest (병렬 — 모두 userId만 필요)
+    const [setting, baseline, activeRest] = await Promise.all([
+      prisma.emergencySetting.findUnique({ where: { userId: user.id } }),
+      prisma.userBaseline.findUnique({ where: { userId_exchange: { userId: user.id, exchange } } }),
+      prisma.restDeclaration.findFirst({ where: { userId: user.id, expiresAt: { gt: new Date() }, cancelledAt: null } }),
+    ]);
+    lap("setting+baseline+rest");
 
     if (setting?.enabled === false) {
       return NextResponse.json({ level: 0, sessionId: null });
@@ -44,49 +49,58 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ level: 0, sessionId: null });
     }
 
-    // ③ 위험도 판단 (detectEmergency 내부에서 setting 한 번 더 읽지만 캐시됨)
-    const decision = await detectEmergency(user.id, {
-      exchange,
-      symbol,
-      side,
-      size: Number(size),
-      openedAt: Date.now(),
-    });
-    lap(`detectEmergency level=${decision.level}`);
+    // ③ 순수 계산 (DB 쿼리 없음)
+    const decision = computeEmergency(
+      { exchange, symbol, side, size: Number(size), openedAt: Date.now() },
+      { baseline, setting, activeRest }
+    );
+    lap(`compute level=${decision.level}`);
 
     if (decision.level === 0) {
       return NextResponse.json({ level: 0, sessionId: null });
     }
 
     const forceSentence = setting?.customMessage || "원칙을 지켜야 살아남는다";
+
+    // ④ Batch 3: 과거 패턴 조회 + 세션 생성 (병렬 — level > 0일 때만)
+    const [pastSessions, session] = await Promise.all([
+      prisma.emergencyAlertSession.findMany({
+        where: {
+          userId: user.id,
+          startedAt: { gt: new Date(Date.now() - 90 * 24 * 3600_000) },
+          userAction: { in: ["kept", "ignored", "user_closing"] },
+        },
+        select: { id: true },
+      }),
+      prisma.emergencyAlertSession.create({
+        data: {
+          userId:         user.id,
+          positionId:     null,
+          source,
+          exchange,
+          symbol:         String(symbol),
+          side:           String(side),
+          size:           Number(size),
+          sizeMultiplier: decision.context.sizeMultiplier,
+          level:          decision.level,
+          triggers:       decision.triggers,
+          context:        decision.context as object,
+          forceSentence,
+        },
+      }),
+    ]);
+    lap("pastSessions+session");
+
+    const pastSimilarCount = pastSessions.length > 0 ? pastSessions.length : undefined;
     const triggerLabels = decision.triggers.map(t => TRIGGER_LABELS[t] ?? t);
-    const pastPattern = decision.context.pastSimilarCount
-      ? `최근 90일간 유사 상황 ${decision.context.pastSimilarCount}회 발동`
+    const pastPattern = pastSimilarCount
+      ? `최근 90일간 유사 상황 ${pastSimilarCount}회 발동`
       : undefined;
 
-    // ④ 세션 기록
-    const session = await prisma.emergencyAlertSession.create({
-      data: {
-        userId: user.id,
-        positionId: null,
-        source,
-        exchange,
-        symbol:        String(symbol),
-        side:          String(side),
-        size:          Number(size),
-        sizeMultiplier: decision.context.sizeMultiplier,
-        level:         decision.level,
-        triggers:      decision.triggers,
-        context:       decision.context as object,
-        forceSentence,
-      },
-    });
-    lap("session create");
-
     return NextResponse.json({
-      level:           decision.level,
-      sessionId:       session.id,
-      triggers:        triggerLabels,
+      level:            decision.level,
+      sessionId:        session.id,
+      triggers:         triggerLabels,
       pastPattern,
       forceSentence,
       countdownSeconds: [0, 10, 30, 60][decision.level],
