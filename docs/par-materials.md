@@ -170,6 +170,16 @@
 - **Action**: vercel.json에서 해당 항목 제거. `/api/cron/emergency-queue` 라우트는 그대로 유지하고 외부 스케줄러(cron-job.org 무료)에서 HTTP GET으로 직접 호출하는 구조로 이관
 - **Result**: 코드 변경 0줄로 스케줄러 교체 완료. 배포 오류 해소, 5분 간격 외부 트리거로 동일 동작 유지
 
+### Emergency Brake 트리거 시스템 재설계 (2026-05-21)
+- **Problem**: 통계 기반 자동 트리거(UserBaseline sizeMultiplier)는 과거 이상치에 의해 기준이 왜곡되고 false positive가 많아 사용자 신뢰 저하. 신규 사용자는 sampleSize < 5 보호로 아예 작동 안 함
+- **Action**: 7개 자동 트리거 전체 제거, 6개 사용자 정의 룰로 교체. 새 DB 모델 4개(UserTriggerSettings/NoTradeWindow/RecurringNoTrade/TriggerViolation) 설계, 다중 발동 통합(1=L1/2=L2/3+=L3), KST 타임존 헬퍼 구현
+- **Result**: false positive 구조적 제거, 사용자가 직접 룰 예측 가능, 신규 사용자도 즉시 사용 가능. 3개 프로젝트(웹/확장/앱) 동시 업데이트
+
+### Emergency Brake 차단 상태 UI (2026-05-21)
+- **Problem**: 상태 기반 트리거(시간대 차단 등)가 발동됐을 때 사용자가 인지할 방법이 없었음. 기존은 진입 클릭 시점에만 체크
+- **Action**: 웹 설정 페이지에 30초 폴링 + 상단 차단 박스, 크롬 확장에 fixed 빨간 띠(banner.js) + 5분 폴링 + background→content 메시지 전달, Android 오버레이에 트리거 메시지 목록 표시
+- **Result**: 차단 상태를 3개 채널(웹/확장/앱)에서 실시간으로 인지 가능
+
 ### Vercel 배포 환경 점검 체계화 (2026-05-19)
 - **Problem**: Vercel 배포 전 .env 노출 여부, prisma generate 누락, NEXTAUTH_URL 플레이스홀더 등 다수 항목 점검 필요. 놓치면 배포 후 런타임 오류 또는 보안 노출
 - **Action**: 점검 항목 체계화 — git ls-files/log/status 3단계 .env 검사, `prisma generate && next build` 스크립트 통합, 환경변수 13개 변경 필요 여부 분류표 작성, CRON_SECRET/NEXTAUTH_SECRET 신규 생성
