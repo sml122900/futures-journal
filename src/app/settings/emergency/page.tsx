@@ -1,254 +1,676 @@
 "use client";
-// Emergency Brake 설정 페이지
-import { useState, useEffect } from "react";
+// Emergency Brake 설정 — 6개 사용자 정의 트리거 카드 UI
+import { useState, useEffect, useCallback } from "react";
 
-interface EmergencySetting {
-  enabled: boolean;
-  level1Threshold: number;
-  level2Threshold: number;
-  level3Threshold: number;
-  activeHoursOnly: boolean;
-  activeHourStart: number;
-  activeHourEnd: number;
-  customMessage: string | null;
-  pausedUntil: string | null;
-  pauseReason: string | null;
+// ─── 타입 ──────────────────────────────────────────────────────
+
+interface TriggerSettings {
+  maxTotalPositionEnabled: boolean;
+  maxTotalPositionUsdt: number | null;
+  maxSingleLossEnabled: boolean;
+  maxSingleLossUsdt: number | null;
+  minIntervalEnabled: boolean;
+  minIntervalMinutes: number | null;
+  lastPositionEntryAt: string | null;
+  maxSingleSizeEnabled: boolean;
+  maxSingleSizeUsdt: number | null;
+  forceSentence: string;
 }
 
-const DEFAULT: EmergencySetting = {
-  enabled: true,
-  level1Threshold: 1.5,
-  level2Threshold: 2.0,
-  level3Threshold: 5.0,
-  activeHoursOnly: false,
-  activeHourStart: 0,
-  activeHourEnd: 23,
-  customMessage: null,
-  pausedUntil: null,
-  pauseReason: null,
+interface NoTradeWindow {
+  id: string;
+  startAt: string;
+  endAt: string;
+  reason: string | null;
+}
+
+interface RecurringRule {
+  id: string;
+  startHour: number;
+  startMin: number;
+  endHour: number;
+  endMin: number;
+  reason: string | null;
+  enabled: boolean;
+}
+
+interface BlockingStatus {
+  isBlocking: boolean;
+  reasons: string[];
+  forceSentence: string;
+}
+
+// ─── 헬퍼 ──────────────────────────────────────────────────────
+
+const DEFAULT: TriggerSettings = {
+  maxTotalPositionEnabled: false,
+  maxTotalPositionUsdt: null,
+  maxSingleLossEnabled: false,
+  maxSingleLossUsdt: null,
+  minIntervalEnabled: false,
+  minIntervalMinutes: null,
+  lastPositionEntryAt: null,
+  maxSingleSizeEnabled: false,
+  maxSingleSizeUsdt: null,
+  forceSentence: "나는 충동이 아닌 원칙으로 매매할 것을 맹세한다",
 };
 
-const PAUSE_OPTIONS = [
-  { label: "15분", minutes: 15 },
-  { label: "1시간", minutes: 60 },
-  { label: "24시간", minutes: 1440 },
-];
+function fmtKST(iso: string): string {
+  const d = new Date(iso);
+  const kst = new Date(d.getTime() + 9 * 3600_000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${kst.getUTCFullYear()}-${pad(kst.getUTCMonth() + 1)}-${pad(kst.getUTCDate())} ${pad(kst.getUTCHours())}:${pad(kst.getUTCMinutes())}`;
+}
+
+function padT(n: number) { return String(n).padStart(2, "0"); }
+
+// ─── 공통 카드 ─────────────────────────────────────────────────
+
+function Card({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-sm p-5 space-y-4">
+      {children}
+    </div>
+  );
+}
+
+function CardHeader({ icon, title, enabled, onToggle }: {
+  icon: string; title: string; enabled: boolean; onToggle: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between">
+      <div className="flex items-center gap-2">
+        <span className="text-xl">{icon}</span>
+        <span className="font-semibold text-gray-800 dark:text-gray-100">{title}</span>
+      </div>
+      <button
+        onClick={onToggle}
+        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+          enabled ? "bg-blue-600" : "bg-gray-300 dark:bg-gray-600"
+        }`}
+      >
+        <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${
+          enabled ? "translate-x-6" : "translate-x-1"
+        }`} />
+      </button>
+    </div>
+  );
+}
+
+function StatusBadge({ isActive, label }: { isActive: boolean; label: string }) {
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+      isActive
+        ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+        : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"
+    }`}>
+      {label}
+    </span>
+  );
+}
+
+function SaveBtn({ saving, onSave }: { saving: boolean; onSave: () => void }) {
+  return (
+    <button
+      onClick={onSave}
+      disabled={saving}
+      className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium disabled:opacity-50"
+    >
+      {saving ? "저장 중..." : "저장"}
+    </button>
+  );
+}
+
+// ─── 메인 페이지 ───────────────────────────────────────────────
 
 export default function EmergencySettingsPage() {
-  const [setting, setSetting] = useState<EmergencySetting>(DEFAULT);
+  const [setting, setSetting] = useState<TriggerSettings>(DEFAULT);
+  const [windows, setWindows] = useState<NoTradeWindow[]>([]);
+  const [recurring, setRecurring] = useState<RecurringRule[]>([]);
+  const [blocking, setBlocking] = useState<BlockingStatus | null>(null);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving]   = useState(false);
-  const [saved, setSaved]     = useState(false);
-  const [pauseReason, setPauseReason] = useState("");
+  const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    fetch("/api/settings/emergency")
-      .then((r) => r.json())
-      .then((d) => { if (d.setting) setSetting(d.setting); })
-      .finally(() => setLoading(false));
+  // 모달 상태
+  const [showWinModal, setShowWinModal] = useState(false);
+  const [winStart, setWinStart] = useState("");
+  const [winEnd, setWinEnd] = useState("");
+  const [winReason, setWinReason] = useState("");
+  const [showRuleModal, setShowRuleModal] = useState(false);
+  const [ruleEditId, setRuleEditId] = useState<string | null>(null);
+  const [ruleStartH, setRuleStartH] = useState(23);
+  const [ruleStartM, setRuleStartM] = useState(0);
+  const [ruleEndH, setRuleEndH] = useState(6);
+  const [ruleEndM, setRuleEndM] = useState(0);
+  const [ruleReason, setRuleReason] = useState("");
+
+  // 숫자 입력 초안 상태
+  const [maxTotalDraft, setMaxTotalDraft] = useState("");
+  const [maxLossDraft, setMaxLossDraft] = useState("");
+  const [intervalDraft, setIntervalDraft] = useState("");
+  const [maxSizeDraft, setMaxSizeDraft] = useState("");
+
+  const loadAll = useCallback(async () => {
+    try {
+      const [s, w, r, b] = await Promise.all([
+        fetch("/api/trigger-settings").then(x => x.json()),
+        fetch("/api/no-trade-windows").then(x => x.json()),
+        fetch("/api/recurring-no-trade").then(x => x.json()),
+        fetch("/api/extension/blocking-status").then(x => x.json()),
+      ]);
+      const loaded = s.setting ?? DEFAULT;
+      setSetting(loaded);
+      setMaxTotalDraft(loaded.maxTotalPositionUsdt?.toString() ?? "");
+      setMaxLossDraft(loaded.maxSingleLossUsdt?.toString() ?? "");
+      setIntervalDraft(loaded.minIntervalMinutes?.toString() ?? "");
+      setMaxSizeDraft(loaded.maxSingleSizeUsdt?.toString() ?? "");
+      setWindows(w.windows ?? []);
+      setRecurring(r.rules ?? []);
+      setBlocking(b);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  async function save(patch: Partial<EmergencySetting>) {
+  useEffect(() => { loadAll(); }, [loadAll]);
+
+  // 30초 폴링
+  useEffect(() => {
+    const id = setInterval(async () => {
+      try {
+        const b = await fetch("/api/extension/blocking-status").then(x => x.json());
+        setBlocking(b);
+      } catch { /* 폴링 실패 무시 */ }
+    }, 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  async function putSetting(patch: Partial<TriggerSettings>) {
     setSaving(true);
-    setSaved(false);
     try {
-      const res = await fetch("/api/settings/emergency", {
+      const res = await fetch("/api/trigger-settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       });
       const data = await res.json();
-      if (data.setting) { setSetting(data.setting); setSaved(true); }
+      if (data.setting) setSetting(data.setting);
     } finally {
       setSaving(false);
-      setTimeout(() => setSaved(false), 2000);
     }
   }
 
-  async function handlePause(minutes: number) {
-    if (!pauseReason.trim()) {
-      alert("일시 비활성화 사유를 입력해주세요.");
-      return;
-    }
-    await save({
-      pausedUntil: new Date(Date.now() + minutes * 60_000).toISOString(),
-      pauseReason: pauseReason,
+  // 윈도우 추가
+  async function addWindow() {
+    if (!winStart || !winEnd) return;
+    // datetime-local 입력은 로컬 시간 (KST) → UTC 변환
+    const startUTC = new Date(winStart + ":00").toISOString();
+    const endUTC   = new Date(winEnd   + ":00").toISOString();
+    const res = await fetch("/api/no-trade-windows", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ startAt: startUTC, endAt: endUTC, reason: winReason || undefined }),
     });
-    setPauseReason("");
+    if (res.ok) {
+      const data = await res.json();
+      setWindows(prev => [...prev, data.window].sort(
+        (a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime()
+      ));
+      setShowWinModal(false);
+      setWinStart(""); setWinEnd(""); setWinReason("");
+    }
   }
 
-  async function handleUnpause() {
-    await save({ pausedUntil: null, pauseReason: null });
+  async function deleteWindow(id: string) {
+    await fetch(`/api/no-trade-windows/${id}`, { method: "DELETE" });
+    setWindows(prev => prev.filter(w => w.id !== id));
   }
 
-  if (loading) return <div className="p-8 text-gray-500">불러오는 중...</div>;
+  // 반복 규칙 추가/수정
+  async function saveRule() {
+    const body = { startHour: ruleStartH, startMin: ruleStartM, endHour: ruleEndH, endMin: ruleEndM, reason: ruleReason || undefined };
+    if (ruleEditId) {
+      const res = await fetch(`/api/recurring-no-trade/${ruleEditId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRecurring(prev => prev.map(r => r.id === ruleEditId ? data.rule : r));
+      }
+    } else {
+      const res = await fetch("/api/recurring-no-trade", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRecurring(prev => [...prev, data.rule]);
+      }
+    }
+    setShowRuleModal(false);
+    resetRuleForm();
+  }
 
-  const isPaused = setting.pausedUntil && new Date(setting.pausedUntil) > new Date();
+  async function deleteRule(id: string) {
+    await fetch(`/api/recurring-no-trade/${id}`, { method: "DELETE" });
+    setRecurring(prev => prev.filter(r => r.id !== id));
+  }
+
+  async function toggleRule(id: string, enabled: boolean) {
+    const res = await fetch(`/api/recurring-no-trade/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setRecurring(prev => prev.map(r => r.id === id ? data.rule : r));
+    }
+  }
+
+  function openEditRule(rule: RecurringRule) {
+    setRuleEditId(rule.id);
+    setRuleStartH(rule.startHour); setRuleStartM(rule.startMin);
+    setRuleEndH(rule.endHour);     setRuleEndM(rule.endMin);
+    setRuleReason(rule.reason ?? "");
+    setShowRuleModal(true);
+  }
+
+  function resetRuleForm() {
+    setRuleEditId(null);
+    setRuleStartH(23); setRuleStartM(0);
+    setRuleEndH(6);    setRuleEndM(0);
+    setRuleReason("");
+  }
+
+  // 현재 활성 윈도우
+  const now = new Date();
+  const activeWindow = windows.find(w => new Date(w.startAt) <= now && new Date(w.endAt) > now);
+  const futureWindows = windows.filter(w => new Date(w.startAt) > now);
+
+  // 현재 활성 반복 규칙 (간단 체크 — UTC+9)
+  const kstHour = (now.getUTCHours() + 9) % 24;
+  const kstMin  = now.getUTCMinutes();
+  const activeRule = recurring.find(r => {
+    if (!r.enabled) return false;
+    const nowMins   = kstHour * 60 + kstMin;
+    const startMins = r.startHour * 60 + r.startMin;
+    const endMins   = r.endHour   * 60 + r.endMin;
+    return startMins <= endMins
+      ? nowMins >= startMins && nowMins < endMins
+      : nowMins >= startMins || nowMins < endMins;
+  });
+
+  // min_interval 남은 시간
+  let intervalStatus = "";
+  if (setting.minIntervalEnabled && setting.minIntervalMinutes && setting.lastPositionEntryAt) {
+    const elapsed = Math.floor((Date.now() - new Date(setting.lastPositionEntryAt).getTime()) / 60_000);
+    const left = setting.minIntervalMinutes - elapsed;
+    intervalStatus = left > 0 ? `다음 진입 가능: ${left}분 후` : "현재 진입 가능";
+  }
+
+  if (loading) {
+    return <div className="p-8 text-gray-500 dark:text-gray-400">불러오는 중...</div>;
+  }
 
   return (
-    <div className="max-w-2xl mx-auto p-6 space-y-6">
+    <div className="max-w-2xl mx-auto p-4 sm:p-6 space-y-5">
+
+      {/* 헤더 */}
       <div>
-        <h1 className="text-2xl font-bold">Emergency Brake 설정</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          뇌동매매 감지 시 텔레그램으로 강력한 경고를 발송합니다.
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-50">🛡️ Emergency Brake 설정</h1>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          매매 충동을 막아주는 6가지 안전장치를 직접 설정하세요
         </p>
       </div>
 
-      {saved && (
-        <div className="px-4 py-2 rounded-lg bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 text-sm">
-          ✅ 저장되었습니다.
+      {/* 현재 차단 상태 */}
+      {blocking && (
+        <div className={`rounded-xl p-4 ${
+          blocking.isBlocking
+            ? "bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800"
+            : "bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800"
+        }`}>
+          {blocking.isBlocking ? (
+            <>
+              <p className="font-semibold text-red-700 dark:text-red-400">⛔ 현재 매매 차단 상태입니다</p>
+              <ul className="mt-2 space-y-1">
+                {blocking.reasons.map((r, i) => (
+                  <li key={i} className="text-sm text-red-600 dark:text-red-300">• {r}</li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p className="font-semibold text-green-700 dark:text-green-400">✓ 현재 매매 가능 상태입니다</p>
+          )}
         </div>
       )}
 
-      {/* 섹션 1: 활성화 */}
-      <section className="rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="font-medium">Emergency Brake 사용</p>
-            <p className="text-xs text-gray-500 mt-0.5">평소보다 큰 사이즈 진입 시 텔레그램 경고 발송</p>
-          </div>
-          <button
-            onClick={() => save({ enabled: !setting.enabled })}
-            disabled={saving}
-            className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${setting.enabled ? "bg-blue-600" : "bg-gray-300 dark:bg-gray-600"}`}
-          >
-            <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${setting.enabled ? "translate-x-6" : "translate-x-1"}`} />
-          </button>
+      {/* 강제 타이핑 문장 */}
+      <Card>
+        <div>
+          <p className="font-semibold text-gray-800 dark:text-gray-100">경고 화면에서 입력할 문장</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            경고 화면이 뜨면 이 문장을 정확히 입력해야 닫을 수 있습니다
+          </p>
         </div>
-      </section>
-
-      {/* 섹션 2: 트리거 임계값 */}
-      <section className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 space-y-4">
-        <h2 className="font-medium">트리거 임계값</h2>
-        {[
-          { key: "level1Threshold" as const, label: "Level 1 (주의)", color: "text-yellow-600", desc: "1회 경고" },
-          { key: "level2Threshold" as const, label: "Level 2 (경고)", color: "text-orange-600", desc: "3회 경고" },
-          { key: "level3Threshold" as const, label: "Level 3 (긴급)", color: "text-red-600", desc: "6회 + 5분 후속" },
-        ].map(({ key, label, color, desc }) => (
-          <div key={key} className="flex items-center gap-4">
-            <div className="w-36">
-              <p className={`text-sm font-medium ${color}`}>{label}</p>
-              <p className="text-xs text-gray-400">{desc}</p>
-            </div>
-            <div className="flex-1">
-              <input
-                type="range"
-                min={1.0} max={10.0} step={0.5}
-                value={setting[key]}
-                onChange={(e) => setSetting((s) => ({ ...s, [key]: parseFloat(e.target.value) }))}
-                className="w-full"
-              />
-            </div>
-            <div className="w-16 text-right">
-              <span className="font-mono font-medium">{setting[key].toFixed(1)}x</span>
-            </div>
-          </div>
-        ))}
-        <button
-          onClick={() => save({ level1Threshold: setting.level1Threshold, level2Threshold: setting.level2Threshold, level3Threshold: setting.level3Threshold })}
-          disabled={saving}
-          className="mt-2 px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm disabled:opacity-50"
-        >
-          {saving ? "저장 중..." : "저장"}
-        </button>
-      </section>
-
-      {/* 섹션 3: 작동 시간대 */}
-      <section className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="font-medium">특정 시간대만 작동</h2>
-          <button
-            onClick={() => save({ activeHoursOnly: !setting.activeHoursOnly })}
-            disabled={saving}
-            className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${setting.activeHoursOnly ? "bg-blue-600" : "bg-gray-300 dark:bg-gray-600"}`}
-          >
-            <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${setting.activeHoursOnly ? "translate-x-6" : "translate-x-1"}`} />
-          </button>
+        <textarea
+          value={setting.forceSentence}
+          onChange={e => setSetting(s => ({ ...s, forceSentence: e.target.value }))}
+          rows={2}
+          className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-transparent text-sm text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+        />
+        <div className="flex justify-end">
+          <SaveBtn saving={saving} onSave={() => putSetting({ forceSentence: setting.forceSentence })} />
         </div>
-        {setting.activeHoursOnly && (
-          <div className="flex items-center gap-3 text-sm">
-            <input type="number" min={0} max={23} value={setting.activeHourStart}
-              onChange={(e) => setSetting((s) => ({ ...s, activeHourStart: parseInt(e.target.value) }))}
-              className="w-16 px-2 py-1 rounded border border-gray-200 dark:border-gray-700 bg-transparent"
-            />
-            <span className="text-gray-500">시 ~</span>
-            <input type="number" min={0} max={23} value={setting.activeHourEnd}
-              onChange={(e) => setSetting((s) => ({ ...s, activeHourEnd: parseInt(e.target.value) }))}
-              className="w-16 px-2 py-1 rounded border border-gray-200 dark:border-gray-700 bg-transparent"
-            />
-            <span className="text-gray-500">시</span>
-            <button
-              onClick={() => save({ activeHourStart: setting.activeHourStart, activeHourEnd: setting.activeHourEnd })}
-              disabled={saving}
-              className="px-3 py-1 rounded bg-blue-600 text-white text-xs disabled:opacity-50"
-            >저장</button>
-          </div>
-        )}
-      </section>
+      </Card>
 
-      {/* 섹션 4: 강제 문장 */}
-      <section className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 space-y-2">
-        <h2 className="font-medium">나만의 경고 문구 (선택)</h2>
-        <p className="text-xs text-gray-500">비워두면 기본 문구 사용: "원칙을 지켜야 살아남는다"</p>
-        <div className="flex gap-2">
+      {/* 카드 1: 총 포지션 규모 */}
+      <Card>
+        <CardHeader
+          icon="💰" title="총 포지션 규모 제한"
+          enabled={setting.maxTotalPositionEnabled}
+          onToggle={() => putSetting({ maxTotalPositionEnabled: !setting.maxTotalPositionEnabled })}
+        />
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          보유 중인 모든 포지션의 합이 한도를 넘으면 경고
+        </p>
+        <div className="flex items-center gap-2">
           <input
-            type="text"
-            value={setting.customMessage ?? ""}
-            onChange={(e) => setSetting((s) => ({ ...s, customMessage: e.target.value }))}
-            placeholder="나만의 경고 문구를 입력하세요"
-            className="flex-1 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-transparent text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            type="number" min={0} step={100}
+            value={maxTotalDraft}
+            onChange={e => setMaxTotalDraft(e.target.value)}
+            placeholder="10000"
+            className="w-36 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-transparent text-sm text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
-          <button
-            onClick={() => save({ customMessage: setting.customMessage })}
-            disabled={saving}
-            className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm disabled:opacity-50"
-          >저장</button>
+          <span className="text-sm text-gray-500 dark:text-gray-400">USDT</span>
+          <SaveBtn saving={saving} onSave={() => putSetting({ maxTotalPositionUsdt: parseFloat(maxTotalDraft) || null })} />
         </div>
-      </section>
+        <StatusBadge
+          isActive={setting.maxTotalPositionEnabled && !!setting.maxTotalPositionUsdt}
+          label={setting.maxTotalPositionEnabled && setting.maxTotalPositionUsdt
+            ? `한도: ${setting.maxTotalPositionUsdt} USDT`
+            : "비활성"}
+        />
+      </Card>
 
-      {/* 섹션 5: 일시 비활성화 */}
-      <section className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 space-y-3">
-        <h2 className="font-medium">일시 비활성화</h2>
-        {isPaused ? (
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-amber-700 dark:text-amber-400">
-                ⏸ {new Date(setting.pausedUntil!).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}까지 비활성화
-              </p>
-              {setting.pauseReason && (
-                <p className="text-xs text-gray-500 mt-0.5">사유: {setting.pauseReason}</p>
-              )}
-            </div>
-            <button
-              onClick={handleUnpause}
-              disabled={saving}
-              className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
-            >재활성화</button>
+      {/* 카드 2: 단발성 금지 시간 */}
+      <Card>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">📅</span>
+            <span className="font-semibold text-gray-800 dark:text-gray-100">특정 일정에 매매 금지</span>
           </div>
-        ) : (
-          <>
-            <input
-              type="text"
-              value={pauseReason}
-              onChange={(e) => setPauseReason(e.target.value)}
-              placeholder="비활성화 사유 (필수)"
-              className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-transparent text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-            <div className="flex gap-2">
-              {PAUSE_OPTIONS.map(({ label, minutes }) => (
-                <button
-                  key={minutes}
-                  onClick={() => handlePause(minutes)}
-                  disabled={saving}
-                  className="flex-1 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50"
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </>
+          <button
+            onClick={() => setShowWinModal(true)}
+            className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+          >
+            + 시간 추가
+          </button>
+        </div>
+        <p className="text-sm text-gray-500 dark:text-gray-400">특정 날짜와 시간을 지정해 매매를 차단 (KST)</p>
+
+        {activeWindow && (
+          <div className="text-sm text-red-600 dark:text-red-400 font-medium">
+            🔴 현재 매매 금지 중 (~{fmtKST(activeWindow.endAt)} KST까지)
+            {activeWindow.reason && ` — ${activeWindow.reason}`}
+          </div>
         )}
-      </section>
+
+        {windows.length === 0 ? (
+          <p className="text-sm text-gray-400 dark:text-gray-500">등록된 항목 없음</p>
+        ) : (
+          <ul className="space-y-2">
+            {windows.map(w => (
+              <li key={w.id} className="flex items-start justify-between gap-2 text-sm">
+                <span className="text-gray-700 dark:text-gray-200">
+                  {fmtKST(w.startAt)} → {fmtKST(w.endAt)} KST
+                  {w.reason && <span className="text-gray-400 dark:text-gray-500"> ({w.reason})</span>}
+                </span>
+                <button onClick={() => deleteWindow(w.id)} className="text-xs text-red-500 hover:text-red-700 shrink-0">삭제</button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {!activeWindow && (
+          <StatusBadge
+            isActive={futureWindows.length > 0}
+            label={futureWindows.length > 0 ? `예정된 금지 ${futureWindows.length}개` : "예정 없음"}
+          />
+        )}
+      </Card>
+
+      {/* 카드 3: 반복 금지 시간대 */}
+      <Card>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">🕐</span>
+            <span className="font-semibold text-gray-800 dark:text-gray-100">반복 금지 시간 (매일)</span>
+          </div>
+          <button
+            onClick={() => { resetRuleForm(); setShowRuleModal(true); }}
+            className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+          >
+            + 시간대 추가
+          </button>
+        </div>
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          취침 시간 등 매일 반복되는 매매 금지 시간 (KST 기준)
+        </p>
+
+        {activeRule && (
+          <div className="text-sm text-red-600 dark:text-red-400 font-medium">
+            🔴 현재 활성 중 (~{padT(activeRule.endHour)}:{padT(activeRule.endMin)} KST)
+            {activeRule.reason && ` — ${activeRule.reason}`}
+          </div>
+        )}
+
+        {recurring.length === 0 ? (
+          <p className="text-sm text-gray-400 dark:text-gray-500">등록된 시간대 없음</p>
+        ) : (
+          <ul className="space-y-2">
+            {recurring.map(r => (
+              <li key={r.id} className="flex items-center justify-between gap-2 text-sm">
+                <span className={`text-gray-700 dark:text-gray-200 ${!r.enabled ? "opacity-40 line-through" : ""}`}>
+                  {padT(r.startHour)}:{padT(r.startMin)} → {padT(r.endHour)}:{padT(r.endMin)} KST
+                  {r.reason && <span className="text-gray-400 dark:text-gray-500"> ({r.reason})</span>}
+                </span>
+                <div className="flex gap-2 shrink-0">
+                  <button onClick={() => toggleRule(r.id, !r.enabled)}
+                    className="text-xs text-gray-500 hover:text-blue-500">
+                    {r.enabled ? "끄기" : "켜기"}
+                  </button>
+                  <button onClick={() => openEditRule(r)} className="text-xs text-blue-500 hover:text-blue-700">수정</button>
+                  <button onClick={() => deleteRule(r.id)} className="text-xs text-red-500 hover:text-red-700">삭제</button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <StatusBadge
+          isActive={recurring.filter(r => r.enabled).length > 0}
+          label={`등록된 시간대 ${recurring.filter(r => r.enabled).length}개`}
+        />
+      </Card>
+
+      {/* 카드 4: 단일 포지션 손실 한도 */}
+      <Card>
+        <CardHeader
+          icon="📉" title="포지션 손실 한도"
+          enabled={setting.maxSingleLossEnabled}
+          onToggle={() => putSetting({ maxSingleLossEnabled: !setting.maxSingleLossEnabled })}
+        />
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          보유 중인 포지션 하나의 손실이 한도를 넘으면 경고
+        </p>
+        <div className="flex items-center gap-2">
+          <input
+            type="number" min={0} step={10}
+            value={maxLossDraft}
+            onChange={e => setMaxLossDraft(e.target.value)}
+            placeholder="50"
+            className="w-36 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-transparent text-sm text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <span className="text-sm text-gray-500 dark:text-gray-400">USDT</span>
+          <SaveBtn saving={saving} onSave={() => putSetting({ maxSingleLossUsdt: parseFloat(maxLossDraft) || null })} />
+        </div>
+        <StatusBadge
+          isActive={setting.maxSingleLossEnabled && !!setting.maxSingleLossUsdt}
+          label={setting.maxSingleLossEnabled && setting.maxSingleLossUsdt
+            ? `한도: -${setting.maxSingleLossUsdt} USDT`
+            : "비활성"}
+        />
+      </Card>
+
+      {/* 카드 5: 최소 매매 간격 */}
+      <Card>
+        <CardHeader
+          icon="⏱️" title="연속 매매 방지"
+          enabled={setting.minIntervalEnabled}
+          onToggle={() => putSetting({ minIntervalEnabled: !setting.minIntervalEnabled })}
+        />
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          마지막 진입 후 일정 시간이 지나야 다음 진입 가능
+        </p>
+        <div className="flex items-center gap-2">
+          <input
+            type="number" min={1} step={5}
+            value={intervalDraft}
+            onChange={e => setIntervalDraft(e.target.value)}
+            placeholder="30"
+            className="w-28 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-transparent text-sm text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <span className="text-sm text-gray-500 dark:text-gray-400">분</span>
+          <SaveBtn saving={saving} onSave={() => putSetting({ minIntervalMinutes: parseInt(intervalDraft) || null })} />
+        </div>
+        <StatusBadge
+          isActive={setting.minIntervalEnabled && !!intervalStatus}
+          label={setting.minIntervalEnabled ? (intervalStatus || "비활성") : "비활성"}
+        />
+      </Card>
+
+      {/* 카드 6: 1회 진입 사이즈 */}
+      <Card>
+        <CardHeader
+          icon="💸" title="1회 진입 사이즈 제한"
+          enabled={setting.maxSingleSizeEnabled}
+          onToggle={() => putSetting({ maxSingleSizeEnabled: !setting.maxSingleSizeEnabled })}
+        />
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          한 번에 진입할 수 있는 최대 사이즈
+        </p>
+        <div className="flex items-center gap-2">
+          <input
+            type="number" min={0} step={10}
+            value={maxSizeDraft}
+            onChange={e => setMaxSizeDraft(e.target.value)}
+            placeholder="100"
+            className="w-36 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-transparent text-sm text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <span className="text-sm text-gray-500 dark:text-gray-400">USDT</span>
+          <SaveBtn saving={saving} onSave={() => putSetting({ maxSingleSizeUsdt: parseFloat(maxSizeDraft) || null })} />
+        </div>
+        <StatusBadge
+          isActive={setting.maxSingleSizeEnabled && !!setting.maxSingleSizeUsdt}
+          label={setting.maxSingleSizeEnabled && setting.maxSingleSizeUsdt
+            ? `한도: ${setting.maxSingleSizeUsdt} USDT`
+            : "비활성"}
+        />
+      </Card>
+
+      {/* 모달: 단발성 금지 시간 추가 */}
+      {showWinModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white dark:bg-gray-900 rounded-xl shadow-xl w-full max-w-sm p-6 space-y-4">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-50">매매 금지 시간 추가</h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400">KST 기준으로 입력하세요</p>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">시작</label>
+              <input type="datetime-local" value={winStart} onChange={e => setWinStart(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-transparent text-sm text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">종료</label>
+              <input type="datetime-local" value={winEnd} onChange={e => setWinEnd(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-transparent text-sm text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <input type="text" value={winReason} onChange={e => setWinReason(e.target.value)}
+                placeholder="메모 (선택)"
+                className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-transparent text-sm text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setShowWinModal(false)}
+                className="flex-1 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800">
+                취소
+              </button>
+              <button onClick={addWindow}
+                className="flex-1 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium">
+                저장
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 모달: 반복 시간대 추가/수정 */}
+      {showRuleModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white dark:bg-gray-900 rounded-xl shadow-xl w-full max-w-sm p-6 space-y-4">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-50">
+              {ruleEditId ? "반복 시간대 수정" : "반복 시간대 추가"}
+            </h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              KST 기준. 자정 넘어가는 범위 (예: 23:00 → 06:00) 가능.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">시작 (KST)</label>
+                <div className="flex items-center gap-2">
+                  <input type="number" min={0} max={23} value={ruleStartH} onChange={e => setRuleStartH(Number(e.target.value))}
+                    className="w-16 px-2 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-transparent text-sm text-center text-gray-800 dark:text-gray-100" />
+                  <span className="text-gray-500">시</span>
+                  <input type="number" min={0} max={59} value={ruleStartM} onChange={e => setRuleStartM(Number(e.target.value))}
+                    className="w-16 px-2 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-transparent text-sm text-center text-gray-800 dark:text-gray-100" />
+                  <span className="text-gray-500">분</span>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">종료 (KST)</label>
+                <div className="flex items-center gap-2">
+                  <input type="number" min={0} max={23} value={ruleEndH} onChange={e => setRuleEndH(Number(e.target.value))}
+                    className="w-16 px-2 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-transparent text-sm text-center text-gray-800 dark:text-gray-100" />
+                  <span className="text-gray-500">시</span>
+                  <input type="number" min={0} max={59} value={ruleEndM} onChange={e => setRuleEndM(Number(e.target.value))}
+                    className="w-16 px-2 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-transparent text-sm text-center text-gray-800 dark:text-gray-100" />
+                  <span className="text-gray-500">분</span>
+                </div>
+              </div>
+              <input type="text" value={ruleReason} onChange={e => setRuleReason(e.target.value)}
+                placeholder="메모 (예: 취침 시간)"
+                className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-transparent text-sm text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <div className="text-xs text-gray-400 dark:text-gray-500 bg-gray-50 dark:bg-gray-800 rounded-lg p-2">
+                미리보기: {padT(ruleStartH)}:{padT(ruleStartM)} → {padT(ruleEndH)}:{padT(ruleEndM)} KST
+                {(ruleStartH * 60 + ruleStartM) >= (ruleEndH * 60 + ruleEndM)
+                  ? " (자정 넘어가는 범위)"
+                  : ""}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => { setShowRuleModal(false); resetRuleForm(); }}
+                className="flex-1 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800">
+                취소
+              </button>
+              <button onClick={saveRule}
+                className="flex-1 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium">
+                저장
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
