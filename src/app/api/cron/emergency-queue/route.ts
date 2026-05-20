@@ -9,8 +9,16 @@ import { createExchangeForUser } from "@/lib/exchanges";
 import type { ExchangeId } from "@/lib/exchanges";
 
 export async function GET(req: NextRequest) {
-  const secret = req.headers.get("x-cron-secret") ?? new URL(req.url).searchParams.get("secret");
-  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
+  const auth     = req.headers.get("authorization");
+  const expected = `Bearer ${process.env.CRON_SECRET}`;
+
+  // 디버그 로그 (인증 실패 원인 추적용 — 확인 후 제거)
+  console.log("[cron] received auth header length:", auth?.length);
+  console.log("[cron] CRON_SECRET exists:", !!process.env.CRON_SECRET);
+  console.log("[cron] CRON_SECRET length:", process.env.CRON_SECRET?.length);
+  console.log("[cron] auth match:", auth === expected);
+
+  if (!process.env.CRON_SECRET || auth !== expected) {
     return NextResponse.json({ success: false, message: "Unauthorized" }, { status: 401 });
   }
 

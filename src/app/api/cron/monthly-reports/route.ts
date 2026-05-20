@@ -8,8 +8,8 @@ import { MONTHLY_REPORT_SYSTEM, buildWeeklyReportPrompt } from "@/lib/ai-prompts
 const MONTH_MS = 30 * 24 * 60 * 60 * 1000;
 
 export async function GET(req: NextRequest) {
-  const secret = req.headers.get("x-cron-secret") ?? new URL(req.url).searchParams.get("secret");
-  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
+  const auth = req.headers.get("authorization");
+  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ success: false, message: "Unauthorized" }, { status: 401 });
   }
 
