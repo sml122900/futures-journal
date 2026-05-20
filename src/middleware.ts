@@ -16,20 +16,23 @@ function needsCors(pathname: string): boolean {
   return EXTENSION_API_PREFIXES.some(p => pathname.startsWith(p));
 }
 
-function resolveCorsOrigin(origin: string | null): string {
-  if (!origin) return '*';
+function resolveCorsOrigin(origin: string | null): string | null {
+  if (!origin) return null;
   if (origin.startsWith('chrome-extension://')) return origin;
   if (origin === 'https://www.bitget.com') return origin;
-  // 그 외 알려진 안전한 origin
-  return '*';
+  return null; // 허용 목록 외 차단
 }
 
-const CORS_HEADERS = (origin: string | null) => ({
-  'Access-Control-Allow-Origin': resolveCorsOrigin(origin),
-  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Max-Age': '86400',
-});
+const CORS_HEADERS = (origin: string | null): Record<string, string> => {
+  const allowed = resolveCorsOrigin(origin);
+  const headers: Record<string, string> = {
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Max-Age': '86400',
+  };
+  if (allowed) headers['Access-Control-Allow-Origin'] = allowed;
+  return headers;
+};
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;

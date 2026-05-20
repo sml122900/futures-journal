@@ -1,9 +1,13 @@
-// POST /api/extension/selector-failure — DOM 셀렉터 실패 보고 (인증 불필요)
+// POST /api/extension/selector-failure — DOM 셀렉터 실패 보고
 
 import { NextRequest, NextResponse } from "next/server";
+import { authenticateExtension } from "@/lib/extension-auth";
 import { sendTelegramMessage } from "@/lib/telegram";
 
 export async function POST(req: NextRequest) {
+  const user = await authenticateExtension(req);
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   try {
     const body = await req.json();
     const { page, timestamp, domSample } = body;
