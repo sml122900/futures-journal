@@ -7,16 +7,18 @@ function esc(v: string | number): string {
 }
 
 export interface EmergencyContext {
-  symbol: string;
-  side: "long" | "short";
-  size: number;
-  avgSize: number;
-  sizeMultiplier: number;
-  consecutiveProfitDays: number;
-  restDeclaredAt?: Date;
-  pastSimilarCount?: number;
-  pastSimilarLossAvg?: number;
+  symbol:    string;
+  side:      "long" | "short";
+  size:      number;
   sessionId: string;
+  // 하위 호환 (scheduler에서 사용)
+  triggers?: { type: string; message: string }[];
+  forceSentence?: string;
+  // legacy — 사용되지 않지만 템플릿 일부가 참조
+  avgSize?: number;
+  sizeMultiplier?: number;
+  consecutiveProfitDays?: number;
+  pastSimilarCount?: number;
 }
 
 export interface TelegramMessage {
@@ -30,17 +32,20 @@ const APP_URL = process.env.NEXTAUTH_URL ?? "https://futures-journal.vercel.app"
 export function buildStep1Alert(ctx: EmergencyContext): TelegramMessage {
   const side = ctx.side === "long" ? "Long" : "Short";
   const chartUrl = `https://www.bitget.com/futures/usdt/${ctx.symbol}`;
+  const triggerLines = (ctx.triggers ?? [])
+    .map((t, i) => `${i + 1}\\. ${esc(t.message)}`)
+    .join("\n");
   return {
     text:
-      `🚨🚨🚨 *큰 사이즈 진입 감지*\n\n` +
-      `방금 ${esc(ctx.symbol)} ${esc(side)} *${esc(ctx.size.toFixed(0))} USDT* 진입\n` +
-      `\\(평소 평균 *${esc(ctx.avgSize.toFixed(1))} USDT*의 ${esc(ctx.sizeMultiplier.toFixed(1))}배\\)\n\n` +
-      `잠깐\\, 정말 의도한 사이즈인가요?`,
+      `🚨🚨🚨 *Emergency Brake 발동*\n\n` +
+      `${esc(ctx.symbol)} ${esc(side)} *${esc(ctx.size.toFixed(0))} USDT*\n\n` +
+      `*위반 룰:*\n${triggerLines || "규칙 위반 감지"}\n\n` +
+      `잠깐\\, 정말 진행하시겠습니까?`,
     parseMode: "MarkdownV2",
     inlineKeyboard: [
       [
-        { text: "🛑 비트겟에서 청산하기", callback_data: `emergency_close_${ctx.sessionId}` },
-        { text: "📊 차트 다시 보기", url: chartUrl },
+        { text: "🛑 청산하기", callback_data: `emergency_close_${ctx.sessionId}` },
+        { text: "📊 차트 보기", url: chartUrl },
       ],
     ],
   };
@@ -62,33 +67,35 @@ export function buildStep2Alert(ctx: EmergencyContext): TelegramMessage {
 }
 
 export function buildStep3Alert(ctx: EmergencyContext): TelegramMessage {
+  void ctx;
   return {
     text:
-      `📊 *${esc(ctx.consecutiveProfitDays)}일 연속 흑자 기록이 깨질 위험*\n\n` +
-      `오늘까지 ${esc(ctx.consecutiveProfitDays)}일 연속 흑자\\.\n` +
-      `어제까지의 성실함을 기억하세요\\.\n\n` +
-      `이번 한 번의 큰 매매로 무너질 수 있습니다\\.`,
+      `📊 *규칙은 지킬 때 의미가 있습니다*\n\n` +
+      `스스로 정한 규칙을 어기면\n` +
+      `다음에도 어기게 됩니다\\.\n\n` +
+      `지금 멈추면 오늘의 규율이 됩니다\\.`,
     parseMode: "MarkdownV2",
   };
 }
 
 export function buildStep4Alert(ctx: EmergencyContext): TelegramMessage {
-  if (!ctx.pastSimilarCount || ctx.pastSimilarCount === 0) {
+  const count = ctx.pastSimilarCount;
+  if (!count || count === 0) {
     return {
       text:
-        `⚠️ *패턴 경고*\n\n` +
-        `평소보다 *${esc(ctx.sizeMultiplier.toFixed(1))}배* 큰 포지션입니다\\.\n\n` +
-        `큰 사이즈는 감정적 판단의 신호일 수 있습니다\\.\n` +
-        `지금 차트를 다시 한번 냉정하게 보세요\\.`,
+        `⚠️ *자기 자신에게 묻는 시간*\n\n` +
+        `이 매매\\, 계획에 있었나요?\n\n` +
+        `계획 없는 매매는 도박입니다\\.\n` +
+        `지금 차트를 다시 냉정하게 보세요\\.`,
       parseMode: "MarkdownV2",
     };
   }
   return {
     text:
       `⚠️ *과거 데이터 경고*\n\n` +
-      `비슷한 조건에서\n` +
-      `과거 ${esc(ctx.pastSimilarCount)}회 매매 중 손실이 많았습니다\\.\n\n` +
-      `같은 패턴 ${esc(ctx.pastSimilarCount + 1)}번째 시도일 가능성이 있습니다\\.`,
+      `규칙 위반 후 매매에서\n` +
+      `최근 90일간 ${esc(count)}회 손실이 발생했습니다\\.\n\n` +
+      `같은 패턴 ${esc(count + 1)}번째 시도일 수 있습니다\\.`,
     parseMode: "MarkdownV2",
   };
 }

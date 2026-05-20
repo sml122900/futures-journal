@@ -38,9 +38,12 @@ model User {
   baselines            UserBaseline[]
   emergencySessions    EmergencyAlertSession[]
   restDeclarations     RestDeclaration[]
-  emergencySetting     EmergencySetting?
   deviceRegistrations  DeviceRegistration[]
   extensionTokens      ExtensionToken[]
+  triggerSettings      UserTriggerSettings?
+  noTradeWindows       NoTradeWindow[]
+  recurringNoTrades    RecurringNoTrade[]
+  triggerViolations    TriggerViolation[]
 }
 
 // NextAuth Prisma Adapter 필수 모델
@@ -364,22 +367,68 @@ model RestDeclaration {
   @@index([userId, expiresAt])
 }
 
-model EmergencySetting {
-  id              String   @id @default(cuid())
-  userId          String   @unique
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  enabled         Boolean  @default(true)
-  level1Threshold Float    @default(1.5)
-  level2Threshold Float    @default(2.0)
-  level3Threshold Float    @default(5.0)
-  activeHoursOnly Boolean  @default(false)
-  activeHourStart Int      @default(0)
-  activeHourEnd   Int      @default(23)
-  customMessage   String?
-  pausedUntil     DateTime?
-  pauseReason     String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+model UserTriggerSettings {
+  id     String  @id @default(cuid())
+  userId String  @unique
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  maxTotalPositionEnabled Boolean @default(false)
+  maxTotalPositionUsdt    Float?
+
+  maxSingleLossEnabled Boolean @default(false)
+  maxSingleLossUsdt    Float?
+
+  minIntervalEnabled Boolean @default(false)
+  minIntervalMinutes Int?
+  lastPositionEntryAt DateTime?
+
+  maxSingleSizeEnabled Boolean @default(false)
+  maxSingleSizeUsdt    Float?
+
+  forceSentence String @default("나는 충동이 아닌 원칙으로 매매할 것을 맹세한다")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model NoTradeWindow {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  startAt   DateTime
+  endAt     DateTime
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, startAt])
+}
+
+model RecurringNoTrade {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  startHour Int
+  startMin  Int
+  endHour   Int
+  endMin    Int
+  reason    String?
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model TriggerViolation {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  triggerType String
+  message     String
+  context     Json?
+  source      String
+  firedAt     DateTime @default(now())
+
+  @@index([userId, firedAt])
 }
 
 model DeviceRegistration {
